@@ -14,15 +14,18 @@ const login = async (req,res) => {
         if(!user) {
             return res.status(httpStatus.NOT_FOUND).json({message: "User Not Found"})
         }
-        if(bcrypt.compare(password, user.password)){
+        const isMatch = await bcrypt.compare(password, user.password);
+        if(isMatch){
             let token = crypto.randomBytes(20).toString("hex");
             user.token = token;
             await user.save();
             return res.status(httpStatus.OK).json({ token: token})
+        } else {
+            return res.status(httpStatus.UNAUTHORIZED).json({ message: "Invalid Username or Password" })
         }
 
     } catch(error){
-        return res.status(500).json({ message: `Something went wrong ${e}`})
+        return res.status(500).json({ message: `Something went wrong ${error}`})
 
     }
 }
@@ -46,7 +49,7 @@ const register = async (req, res) => {
         await newUser.save();
         res.status(httpStatus.CREATED).json({message: "User Registered"});
     } catch(error) {
-        res.json({message:`Something went wrong ${e}`})
+        res.status(500).json({message:`Something went wrong ${error}`})
 
     }
 
