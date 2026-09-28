@@ -325,3 +325,52 @@
         transform: translateY(-250px) scale(1.5);
     }
 }
+
+.langSelect {
+    background: rgba(15, 23, 42, 0.85);
+    color: #f8fafc;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    outline: none;
+    cursor: pointer;
+    backdrop-filter: blur(12px);
+    transition: all 0.2s ease;
+}
+
+.langSelect:hover {
+    border-color: rgba(99, 102, 241, 0.5);
+    background: rgba(30, 41, 59, 0.9);
+}
+
+.liveCaptionOverlay {
+    position: absolute;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(15, 23, 42, 0.92);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 10px 24px;
+    border-radius: 20px;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 80%;
+}
+
+.captionSender {
+    font-weight: 700;
+    color: #818cf8;
+    font-size: 0.9rem;
+}
+
+.captionText {
+    color: #ffffff;
+    font-size: 1.05rem;
+    font-weight: 500;
+}

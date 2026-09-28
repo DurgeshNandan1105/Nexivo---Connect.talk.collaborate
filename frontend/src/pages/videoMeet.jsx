@@ -12,8 +12,10 @@ import ScreenShareIcon from "@mui/icons-material/ScreenShare";
 import StopScreenShareIcon from "@mui/icons-material/StopScreenShare";
 import ChatIcon from "@mui/icons-material/Chat";
 import SentimentSatisfiedAltIcon from "@mui/icons-material/SentimentSatisfiedAlt";
+import { ALL_LANGUAGES } from "../utils/languages";
+import server from "../environment";
 
-const server_url = "http://localhost:8000";
+const server_url = server ;
 
 var connections = {};
 
@@ -71,6 +73,70 @@ export default function VideoMeetComponent() {
     setTimeout(() => {
       setActiveReactions((prev) => prev.filter((r) => r.id !== reactionId));
     }, 2500);
+  };
+
+  const [mySpeakingLang, setMySpeakingLang] = useState("hi-IN");
+  const [myListeningLang, setMyListeningLang] = useState("original");
+  const [liveCaption, setLiveCaption] = useState(null);
+
+  useEffect(() => {
+    if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) return;
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = mySpeakingLang;
+
+    recognition.onresult = (event) => {
+      const lastIndex = event.results.length - 1;
+      const transcript = event.results[lastIndex][0].transcript;
+      if (socketRef.current && transcript.trim()) {
+        socketRef.current.emit("send-speech-chunk", {
+          text: transcript,
+          sourceLang: mySpeakingLang.split("-")[0],
+          sender: username || "Guest"
+        });
+      }
+    };
+
+    try {
+      recognition.start();
+    } catch (e) {}
+
+    return () => {
+      try {
+        recognition.stop();
+      } catch (e) {}
+    };
+  }, [mySpeakingLang, username]);
+
+  const handleIncomingSpeechChunk = (data) => {
+    if (myListeningLang === "original") {
+      setLiveCaption({ sender: data.sender, text: data.text });
+      setTimeout(() => setLiveCaption(null), 4000);
+    } else {
+      const selectedLangObj = ALL_LANGUAGES.find((l) => l.code === myListeningLang);
+      if (selectedLangObj && socketRef.current) {
+        socketRef.current.emit("request-translation", {
+          text: data.text,
+          sourceLang: data.sourceLang,
+          targetLang: selectedLangObj.iso
+        });
+      }
+    }
+  };
+
+  const handleDeliverTranslatedVoice = (data) => {
+    setLiveCaption({ sender: "Translation", text: data.translatedText });
+    setTimeout(() => setLiveCaption(null), 4000);
+
+    if ("speechSynthesis" in window) {
+      const utterance = new SpeechSynthesisUtterance(data.translatedText);
+      utterance.lang = data.targetLang === "kn" ? "kn-IN" : data.targetLang === "hi" ? "hi-IN" : "en-US";
+      utterance.rate = 1.0;
+      window.speechSynthesis.speak(utterance);
+    }
   };
 
   const videoRef = useRef([]);
@@ -343,6 +409,8 @@ export default function VideoMeetComponent() {
 
       socketRef.current.on("chat-message", addMessage);
       socketRef.current.on("reaction", handleIncomingReaction);
+      socketRef.current.on("receive-speech-chunk", handleIncomingSpeechChunk);
+      socketRef.current.on("deliver-translated-voice", handleDeliverTranslatedVoice);
 
       socketRef.current.on("user-left", (id) => {
         setVideos((videos) => videos.filter((video) => video.socketId !== id));
@@ -737,7 +805,41 @@ export default function VideoMeetComponent() {
             >
               <SentimentSatisfiedAltIcon />
             </IconButton>
+
+            <select
+              value={mySpeakingLang}
+              onChange={(e) => setMySpeakingLang(e.target.value)}
+              className={styles.langSelect}
+              title="Select language you speak"
+            >
+              {ALL_LANGUAGES.map((lang) => (
+                <option key={lang.code} value={lang.code}>
+                  Speak: {lang.label}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={myListeningLang}
+              onChange={(e) => setMyListeningLang(e.target.value)}
+              className={styles.langSelect}
+              title="Select voice language you want to hear"
+            >
+              <option value="original">Listen: Original Voice</option>
+              {ALL_LANGUAGES.map((lang) => (
+                <option key={lang.code} value={lang.code}>
+                  Listen: {lang.label} Voice
+                </option>
+              ))}
+            </select>
           </div>
+
+          {liveCaption && (
+            <div className={styles.liveCaptionOverlay}>
+              <span className={styles.captionSender}>{liveCaption.sender}:</span>
+              <span className={styles.captionText}>{liveCaption.text}</span>
+            </div>
+          )}
 
           {showReactions && (
             <div className={styles.reactionPicker}>

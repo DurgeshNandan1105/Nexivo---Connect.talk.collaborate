@@ -1,4 +1,5 @@
 import { Server } from "socket.io"
+import { translate } from '@vitalets/google-translate-api';
 
 let connections = {}
 let messages = {}
@@ -76,6 +77,47 @@ const connectToSocket = (server) => {
                 connections[matchingRoom].forEach((elem) => {
                     io.to(elem).emit("reaction", emoji, sender, socket.id)
                 })
+            }
+        })
+
+        socket.on("send-speech-chunk", (data) => {
+            const { text, sourceLang, sender } = data;
+            const [matchingRoom, found] = Object.entries(connections)
+            .reduce(([room, isFound], [roomKey, roomValue]) => {
+                if(!isFound && roomValue.includes(socket.id)){
+                    return [roomKey, true];
+                }
+                return [room, isFound];
+            }, ['', false]);
+
+            if(found === true) {
+                connections[matchingRoom].forEach((elem) => {
+                    io.to(elem).emit("receive-speech-chunk", {
+                        text,
+                        sourceLang,
+                        sender,
+                        socketIdSender: socket.id
+                    });
+                });
+            }
+        })
+
+        socket.on("request-translation", async (data) => {
+            const { text, sourceLang, targetLang } = data;
+            try {
+                const result = await translate(text, { from: sourceLang, to: targetLang });
+                socket.emit("deliver-translated-voice", {
+                    originalText: text,
+                    translatedText: result.text,
+                    targetLang
+                });
+            } catch (err) {
+                console.error("Translation error:", err);
+                socket.emit("deliver-translated-voice", {
+                    originalText: text,
+                    translatedText: text,
+                    targetLang
+                });
             }
         })
 
