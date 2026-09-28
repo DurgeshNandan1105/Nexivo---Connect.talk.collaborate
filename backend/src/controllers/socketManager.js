@@ -63,6 +63,22 @@ const connectToSocket = (server) => {
 
         })
 
+        socket.on("send-reaction", (emoji, sender) => {
+            const [matchingRoom, found] = Object.entries(connections)
+            .reduce(([room, isFound], [roomKey, roomValue]) => {
+                if(!isFound && roomValue.includes(socket.id)){
+                    return [roomKey, true];
+                }
+                return [room, isFound];
+            }, ['', false]);
+
+            if(found === true) {
+                connections[matchingRoom].forEach((elem) => {
+                    io.to(elem).emit("reaction", emoji, sender, socket.id)
+                })
+            }
+        })
+
         socket.on("disconnect", () => {
 
             var diffTime = Math.abs(timeOnline[socket.id] - new Date())
