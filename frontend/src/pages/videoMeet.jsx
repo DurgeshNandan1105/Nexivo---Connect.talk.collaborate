@@ -82,6 +82,7 @@ export default function VideoMeetComponent() {
   useEffect(() => {
     if (!("webkitSpeechRecognition" in window || "SpeechRecognition" in window)) return;
 
+    let shouldListen = true;
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
@@ -100,11 +101,32 @@ export default function VideoMeetComponent() {
       }
     };
 
+    recognition.onend = () => {
+      if (shouldListen) {
+        try {
+          recognition.start();
+        } catch (e) {}
+      }
+    };
+
+    recognition.onerror = () => {
+      if (shouldListen) {
+        try {
+          recognition.start();
+        } catch (e) {}
+      }
+    };
+
     try {
       recognition.start();
     } catch (e) {}
 
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.getVoices();
+    }
+
     return () => {
+      shouldListen = false;
       try {
         recognition.stop();
       } catch (e) {}
@@ -112,6 +134,8 @@ export default function VideoMeetComponent() {
   }, [mySpeakingLang, username]);
 
   const handleIncomingSpeechChunk = (data) => {
+    if (data.socketIdSender === socketIdRef.current) return;
+
     if (myListeningLang === "original") {
       setLiveCaption({ sender: data.sender, text: data.text });
       setTimeout(() => setLiveCaption(null), 4000);
@@ -132,9 +156,33 @@ export default function VideoMeetComponent() {
     setTimeout(() => setLiveCaption(null), 4000);
 
     if ("speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (e) {}
+
       const utterance = new SpeechSynthesisUtterance(data.translatedText);
-      utterance.lang = data.targetLang === "kn" ? "kn-IN" : data.targetLang === "hi" ? "hi-IN" : "en-US";
+      const selectedLangObj = ALL_LANGUAGES.find((l) => l.iso === data.targetLang);
+      const targetCode = selectedLangObj ? selectedLangObj.code : "en-US";
+      utterance.lang = targetCode;
+
+      const voices = window.speechSynthesis.getVoices();
+      const matchingVoice = voices.find(
+        (v) => v.lang === targetCode || v.lang.startsWith(data.targetLang)
+      );
+      if (matchingVoice) {
+        utterance.voice = matchingVoice;
+      }
       utterance.rate = 1.0;
+
+      const remoteVideos = document.querySelectorAll("video[data-socket]");
+      remoteVideos.forEach((v) => { v.volume = 0.2; });
+
+      const restoreVolume = () => {
+        remoteVideos.forEach((v) => { v.volume = 1.0; });
+      };
+      utterance.onend = restoreVolume;
+      utterance.onerror = restoreVolume;
+
       window.speechSynthesis.speak(utterance);
     }
   };
@@ -418,6 +466,8 @@ export default function VideoMeetComponent() {
 
       socketRef.current.on("user-joined", (id, clients) => {
         clients.forEach((socketListId) => {
+          if (socketListId === socketIdRef.current) return;
+
           connections[socketListId] = new RTCPeerConnection(
             peerConfigConnections,
           );
@@ -624,7 +674,12 @@ export default function VideoMeetComponent() {
 
             <div className={styles.lobbyVideoWrapper}>
               <video
-                ref={localVideoref}
+                ref={(el) => {
+                  localVideoref.current = el;
+                  if (el && window.localStream) {
+                    el.srcObject = window.localStream;
+                  }
+                }}
                 autoPlay
                 muted
                 className={styles.lobbyVideo}
@@ -866,29 +921,41 @@ export default function VideoMeetComponent() {
             </div>
           ))}
 
+          <div className={styles.meetUserVideoWrapper}>
+            <video
+              ref={(el) => {
+                localVideoref.current = el;
+                if (el && window.localStream) {
+                  el.srcObject = window.localStream;
+                }
+              }}
+              autoPlay
+              muted
+              className={styles.meetUserVideo}
+              style={{ display: video ? "block" : "none" }}
+            ></video>
+            {!video && (
+              <div className={styles.meetUserVideoPlaceholder}>
+                <VideocamOffIcon sx={{ fontSize: 36, color: "#ef4444" }} />
+                <span style={{ color: "#cbd5e1", fontSize: "0.8rem", marginTop: "4px", fontWeight: "600" }}>
+                  Camera Off
+                </span>
+              </div>
+            )}
+          </div>
+
           <div className={styles.conferenceView}>
             {videos.length === 0 ? (
               <div className={styles.mainVideoTile}>
-                <video
-                  ref={localVideoref}
-                  autoPlay
-                  muted
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "cover",
-                    transform: "scaleX(-1)",
-                    display: video ? "block" : "none",
-                  }}
-                ></video>
-                {!video && (
-                  <div className={styles.blackScreenTile}>
-                    <VideocamOffIcon sx={{ fontSize: 64, color: "#ef4444" }} />
-                    <span style={{ color: "#f8fafc", marginTop: "12px", fontSize: "1.1rem", fontWeight: "600" }}>
-                      Camera Off
-                    </span>
+                <div className={styles.waitingContainer}>
+                  <div className={styles.waitingPulse}>
+                    <VideocamIcon sx={{ fontSize: 44, color: "#818cf8" }} />
                   </div>
-                )}
+                  <h3 className={styles.waitingTitle}>Waiting for your friend to join...</h3>
+                  <p className={styles.waitingSubtitle}>
+                    Share this room link with your friend to start the video call
+                  </p>
+                </div>
               </div>
             ) : (
               videos.map((videoItem) => {
@@ -898,7 +965,7 @@ export default function VideoMeetComponent() {
                   videoItem.stream.getVideoTracks()[0].enabled;
 
                 return (
-                  <div key={videoItem.socketId} style={{ position: "relative", width: "100%", height: "100%" }}>
+                  <div key={videoItem.socketId} className={styles.mainVideoTile}>
                     <video
                       data-socket={videoItem.socketId}
                       ref={(ref) => {
@@ -907,7 +974,12 @@ export default function VideoMeetComponent() {
                         }
                       }}
                       autoPlay
-                      style={{ display: hasVideoTrack ? "block" : "none" }}
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                        display: hasVideoTrack ? "block" : "none",
+                      }}
                     ></video>
                     {!hasVideoTrack && (
                       <div className={styles.blackScreenTile}>

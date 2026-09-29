@@ -104,21 +104,33 @@ const connectToSocket = (server) => {
 
         socket.on("request-translation", async (data) => {
             const { text, sourceLang, targetLang } = data;
+            let translatedText = text;
+
             try {
                 const result = await translate(text, { from: sourceLang, to: targetLang });
-                socket.emit("deliver-translated-voice", {
-                    originalText: text,
-                    translatedText: result.text,
-                    targetLang
-                });
+                if (result && result.text) {
+                    translatedText = result.text;
+                }
             } catch (err) {
-                console.error("Translation error:", err);
-                socket.emit("deliver-translated-voice", {
-                    originalText: text,
-                    translatedText: text,
-                    targetLang
-                });
+                console.error("Primary translate error, trying MyMemory fallback:", err.message);
+                try {
+                    const response = await fetch(
+                        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceLang}|${targetLang}`
+                    );
+                    const json = await response.json();
+                    if (json && json.responseData && json.responseData.translatedText) {
+                        translatedText = json.responseData.translatedText;
+                    }
+                } catch (fallbackErr) {
+                    console.error("MyMemory fallback error:", fallbackErr.message);
+                }
             }
+
+            socket.emit("deliver-translated-voice", {
+                originalText: text,
+                translatedText: translatedText,
+                targetLang
+            });
         })
 
         socket.on("disconnect", () => {
