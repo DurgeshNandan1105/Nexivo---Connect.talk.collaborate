@@ -102,27 +102,59 @@ const connectToSocket = (server) => {
             }
         })
 
+        socket.on("user-media-state", (data) => {
+            const [matchingRoom, found] = Object.entries(connections)
+            .reduce(([room, isFound], [roomKey, roomValue]) => {
+                if(!isFound && roomValue.includes(socket.id)){
+                    return [roomKey, true];
+                }
+                return [room, isFound];
+            }, ['', false]);
+
+            if(found === true) {
+                connections[matchingRoom].forEach((elem) => {
+                    if (elem !== socket.id) {
+                        io.to(elem).emit("user-media-state", {
+                            socketId: socket.id,
+                            video: data.video,
+                            audio: data.audio
+                        });
+                    }
+                });
+            }
+        });
+
         socket.on("request-translation", async (data) => {
             const { text, sourceLang, targetLang } = data;
             let translatedText = text;
 
             try {
-                const result = await translate(text, { from: sourceLang, to: targetLang });
+                // Try auto detection first so spoken language is properly detected regardless of setting
+                const result = await translate(text, { from: 'auto', to: targetLang });
                 if (result && result.text) {
                     translatedText = result.text;
                 }
             } catch (err) {
-                console.error("Primary translate error, trying MyMemory fallback:", err.message);
+                console.error("Primary translate with auto failed, trying specific source:", err.message);
                 try {
-                    const response = await fetch(
-                        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceLang}|${targetLang}`
-                    );
-                    const json = await response.json();
-                    if (json && json.responseData && json.responseData.translatedText) {
-                        translatedText = json.responseData.translatedText;
+                    const fallbackResult = await translate(text, { from: sourceLang || 'auto', to: targetLang });
+                    if (fallbackResult && fallbackResult.text) {
+                        translatedText = fallbackResult.text;
                     }
-                } catch (fallbackErr) {
-                    console.error("MyMemory fallback error:", fallbackErr.message);
+                } catch (secondErr) {
+                    console.error("Primary translate error, trying MyMemory fallback:", secondErr.message);
+                    try {
+                        const fromCode = (sourceLang && sourceLang !== 'auto') ? sourceLang : 'autodetect';
+                        const response = await fetch(
+                            `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${fromCode}|${targetLang}`
+                        );
+                        const json = await response.json();
+                        if (json && json.responseData && json.responseData.translatedText) {
+                            translatedText = json.responseData.translatedText;
+                        }
+                    } catch (fallbackErr) {
+                        console.error("MyMemory fallback error:", fallbackErr.message);
+                    }
                 }
             }
 

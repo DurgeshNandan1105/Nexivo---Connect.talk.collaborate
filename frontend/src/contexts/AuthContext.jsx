@@ -7,8 +7,9 @@ import server from "../environment";
 export const AuthContext = createContext({});
 
 const client = axios.create({
-    baseURL: `${server}/api/v1/users`
-})
+    baseURL: `${server}/api/v1/users`,
+    timeout: 45000
+});
 
 export const AuthProvider = ({ children }) => {
     const authContext = useContext(AuthContext);
@@ -22,14 +23,17 @@ export const AuthProvider = ({ children }) => {
                 name: name,
                 username: username,
                 password: password
-            })
+            });
             if (request.status === httpStatus.CREATED) {
                 return request.data.message;
             }
         } catch (err) {
+            if (err.code === "ECONNABORTED" || err.message?.includes("Network Error")) {
+                throw new Error("Server took too long to respond or is unreachable. Please check backend connection.");
+            }
             throw err;
         }
-    }
+    };
 
     const handleLogin = async (username, password) => {
         try {
@@ -43,9 +47,12 @@ export const AuthProvider = ({ children }) => {
                 return request.data;
             }
         } catch (err) {
+            if (err.code === "ECONNABORTED" || err.message?.includes("Network Error")) {
+                throw new Error("Server took too long to respond or is unreachable. Please check backend connection.");
+            }
             throw err;
         }
-    }
+    };
 
     const getHistoryOfUser = async () => {
         try {
@@ -58,7 +65,7 @@ export const AuthProvider = ({ children }) => {
         } catch (err) {
             throw err;
         }
-    }
+    };
 
     const addToUserHistory = async (meetingCode) => {
         try {
@@ -70,16 +77,15 @@ export const AuthProvider = ({ children }) => {
         } catch (err) {
             throw err;
         }
-    }
+    };
 
     const data = {
         userData, setUserData, handleRegister, handleLogin, getHistoryOfUser, addToUserHistory
-    }
+    };
 
     return (
         <AuthContext.Provider value={data}>
             {children}
         </AuthContext.Provider>
-    )
-
-}
+    );
+};
