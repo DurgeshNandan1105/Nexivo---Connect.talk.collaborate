@@ -1,9 +1,11 @@
 import { Server } from "socket.io"
 import { translateText } from "./translate.controller.js";
+import { GeminiLiveSession } from "./geminiLiveStream.js";
 
 let connections = {}
 let messages = {}
 let timeOnline = {}
+let liveSessions = {}
 
 const normalizeRoom = (path) => {
     if (!path) return "/";
@@ -153,8 +155,61 @@ const connectToSocket = (server) => {
             }
         });
 
+        socket.on("start-live-s2s", ({ sourceLang = "hi", targetLang = "en" } = {}) => {
+            const apiKey = process.env.GEMINI_API_KEY;
+            if (!apiKey) return;
+
+            const [matchingRoom, found] = Object.entries(connections)
+            .reduce(([room, isFound], [roomKey, roomValue]) => {
+                if(!isFound && roomValue.includes(socket.id)){
+                    return [roomKey, true];
+                }
+                return [room, isFound];
+            }, ['', false]);
+
+            if (found) {
+                if (liveSessions[socket.id]) {
+                    liveSessions[socket.id].close();
+                }
+
+                liveSessions[socket.id] = new GeminiLiveSession(
+                    apiKey,
+                    sourceLang,
+                    targetLang,
+                    (pcmChunk) => {
+                        connections[matchingRoom].forEach((elem) => {
+                            if (elem !== socket.id) {
+                                io.to(elem).emit("stream-audio-translated", {
+                                    audioData: pcmChunk,
+                                    senderId: socket.id,
+                                });
+                            }
+                        });
+                    }
+                );
+                liveSessions[socket.id].connect();
+            }
+        });
+
+        socket.on("stream-audio-chunk", (chunkBuffer) => {
+            if (liveSessions[socket.id] && liveSessions[socket.id].isConnected) {
+                liveSessions[socket.id].sendAudioChunk(chunkBuffer);
+            }
+        });
+
+        socket.on("stop-live-s2s", () => {
+            if (liveSessions[socket.id]) {
+                liveSessions[socket.id].close();
+                delete liveSessions[socket.id];
+            }
+        });
+
         socket.on("disconnect", () => {
             delete timeOnline[socket.id];
+            if (liveSessions[socket.id]) {
+                liveSessions[socket.id].close();
+                delete liveSessions[socket.id];
+            }
 
             var key;
             for(const [k, v] of JSON.parse(JSON.stringify(Object.entries(connections)))) {

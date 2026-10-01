@@ -1,10 +1,33 @@
 import axios from "axios";
 import server from "../environment";
 
-export const SUPPORTED_LANGUAGES = [
+export const INDIAN_LANGUAGES = [
+  { code: "hi", speechCode: "hi-IN", name: "Hindi (हिन्दी)" },
+  { code: "bn", speechCode: "bn-IN", name: "Bengali (বাংলা)" },
+  { code: "te", speechCode: "te-IN", name: "Telugu (తెలుగు)" },
+  { code: "mr", speechCode: "mr-IN", name: "Marathi (मराठी)" },
+  { code: "ta", speechCode: "ta-IN", name: "Tamil (தமிழ்)" },
+  { code: "ur", speechCode: "ur-IN", name: "Urdu (اردو)" },
+  { code: "gu", speechCode: "gu-IN", name: "Gujarati (ગુજરાતી)" },
+  { code: "kn", speechCode: "kn-IN", name: "Kannada (ಕನ್ನಡ)" },
+  { code: "ml", speechCode: "ml-IN", name: "Malayalam (മലയാളം)" },
+  { code: "pa", speechCode: "pa-IN", name: "Punjabi (ਪੰਜਾਬੀ)" },
+  { code: "or", speechCode: "or-IN", name: "Odia (ଓଡ଼ିଆ)" },
+  { code: "as", speechCode: "as-IN", name: "Assamese (অসমীয়া)" },
+  { code: "bho", speechCode: "bho-IN", name: "Bhojpuri (भोजपुरी)" },
+  { code: "mai", speechCode: "mai-IN", name: "Maithili (मैथिली)" },
+  { code: "sa", speechCode: "sa-IN", name: "Sanskrit (संस्कृतम्)" },
+  { code: "kok", speechCode: "kok-IN", name: "Konkani (कोंकणी)" },
+  { code: "doi", speechCode: "doi-IN", name: "Dogri (डोगरी)" },
+  { code: "sd", speechCode: "sd-IN", name: "Sindhi (سنڌي)" },
+  { code: "ne", speechCode: "ne-IN", name: "Nepali (नेपाली)" },
+  { code: "mni-Mtei", speechCode: "mni-IN", name: "Manipuri / Meitei (মৈতৈ)" },
+  { code: "lus", speechCode: "lus-IN", name: "Mizo (Lushai)" },
+];
+
+export const INTERNATIONAL_LANGUAGES = [
   { code: "en", speechCode: "en-US", name: "English" },
   { code: "es", speechCode: "es-ES", name: "Spanish (Español)" },
-  { code: "hi", speechCode: "hi-IN", name: "Hindi (हिन्दी)" },
   { code: "fr", speechCode: "fr-FR", name: "French (Français)" },
   { code: "de", speechCode: "de-DE", name: "German (Deutsch)" },
   { code: "zh-CN", speechCode: "zh-CN", name: "Chinese (Mandarin)" },
@@ -14,9 +37,12 @@ export const SUPPORTED_LANGUAGES = [
   { code: "pt", speechCode: "pt-BR", name: "Portuguese (Português)" },
   { code: "it", speechCode: "it-IT", name: "Italian (Italiano)" },
   { code: "ko", speechCode: "ko-KR", name: "Korean (한국어)" },
-  { code: "bn", speechCode: "bn-IN", name: "Bengali (বাংলা)" },
-  { code: "ur", speechCode: "ur-PK", name: "Urdu (اردو)" },
   { code: "tr", speechCode: "tr-TR", name: "Turkish (Türkçe)" },
+];
+
+export const SUPPORTED_LANGUAGES = [
+  ...INDIAN_LANGUAGES,
+  ...INTERNATIONAL_LANGUAGES,
 ];
 
 const translationCache = new Map();
@@ -92,8 +118,89 @@ if (typeof window !== "undefined" && "speechSynthesis" in window) {
   };
 }
 
+const speechQueue = [];
+let isProcessingQueue = false;
+
+const processNextInQueue = () => {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+  if (speechQueue.length === 0) {
+    isProcessingQueue = false;
+    return;
+  }
+
+  isProcessingQueue = true;
+  const item = speechQueue.shift();
+  if (!item || !item.text || !item.text.trim()) {
+    processNextInQueue();
+    return;
+  }
+
+  try {
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+    }
+
+    const utterance = new SpeechSynthesisUtterance(item.text.trim());
+    const langObj = SUPPORTED_LANGUAGES.find((l) => l.code === item.langCode);
+    const voiceLang = langObj ? langObj.speechCode : item.langCode;
+
+    utterance.lang = voiceLang;
+    utterance.volume = 1.0;
+    utterance.rate = 1.08; // slightly brisk natural speech pace
+    utterance.pitch = 1.0;
+
+    const voices = window.speechSynthesis.getVoices();
+    if (voices && voices.length > 0) {
+      const matchedVoice =
+        voices.find((v) => v.lang === voiceLang) ||
+        voices.find((v) => v.lang.replace("_", "-").toLowerCase() === voiceLang.toLowerCase()) ||
+        voices.find((v) => v.lang.startsWith(item.langCode)) ||
+        voices.find((v) => v.lang.startsWith("hi")) ||
+        voices.find((v) => v.lang.startsWith("en"));
+      if (matchedVoice) {
+        utterance.voice = matchedVoice;
+      }
+    }
+
+    utterance.onend = () => {
+      setTimeout(processNextInQueue, 15);
+    };
+
+    utterance.onerror = (e) => {
+      console.warn("Speech queue utterance error:", e);
+      setTimeout(processNextInQueue, 15);
+    };
+
+    window.speechSynthesis.speak(utterance);
+  } catch (err) {
+    console.warn("Queue processing error:", err);
+    processNextInQueue();
+  }
+};
+
 /**
- * Text-to-Speech (Audio Voice Dubbing) for live translated audio
+ * Queue translated continuous clauses to speak back-to-back without pauses or cuts
+ */
+export const queueTranslatedAudio = (text, langCode = "en") => {
+  if (!text || !text.trim()) return;
+  speechQueue.push({ text: text.trim(), langCode });
+  if (!isProcessingQueue) {
+    processNextInQueue();
+  }
+};
+
+export const clearAudioQueue = () => {
+  speechQueue.length = 0;
+  isProcessingQueue = false;
+  if (typeof window !== "undefined" && window.speechSynthesis) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch (e) {}
+  }
+};
+
+/**
+ * Immediate one-off Text-to-Speech (for button clicks, tests, and alerts)
  */
 export const speakTranslatedAudio = (text, langCode = "en") => {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) {
@@ -103,18 +210,13 @@ export const speakTranslatedAudio = (text, langCode = "en") => {
 
   if (!text || !text.trim()) return;
 
+  clearAudioQueue();
+
   try {
-    // Unpause if stuck (common Chromium issue)
     if (window.speechSynthesis.paused) {
       window.speechSynthesis.resume();
     }
 
-    // Cancel ongoing speech if already speaking
-    if (window.speechSynthesis.speaking) {
-      window.speechSynthesis.cancel();
-    }
-
-    // Micro-delay ensures Chrome voice queue is completely clean before speaking
     setTimeout(() => {
       try {
         const cleanText = text.trim();
@@ -127,14 +229,14 @@ export const speakTranslatedAudio = (text, langCode = "en") => {
         utterance.rate = 1.0;
         utterance.pitch = 1.0;
 
-        // Try selecting the best matching voice
         const voices = window.speechSynthesis.getVoices();
         if (voices && voices.length > 0) {
           const matchedVoice =
             voices.find((v) => v.lang === voiceLang) ||
+            voices.find((v) => v.lang.replace("_", "-").toLowerCase() === voiceLang.toLowerCase()) ||
             voices.find((v) => v.lang.startsWith(langCode)) ||
+            voices.find((v) => v.lang.startsWith("hi")) ||
             voices.find((v) => v.lang.startsWith("en"));
-
           if (matchedVoice) {
             utterance.voice = matchedVoice;
           }
@@ -148,7 +250,7 @@ export const speakTranslatedAudio = (text, langCode = "en") => {
       } catch (innerErr) {
         console.warn("Error inside speakTranslatedAudio timeout:", innerErr);
       }
-    }, 40);
+    }, 35);
   } catch (err) {
     console.warn("Speech synthesis error:", err);
   }

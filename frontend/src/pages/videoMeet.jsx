@@ -16,7 +16,8 @@ import ClosedCaptionIcon from "@mui/icons-material/ClosedCaption";
 import ClosedCaptionDisabledIcon from "@mui/icons-material/ClosedCaptionDisabled";
 import TranslateIcon from "@mui/icons-material/Translate";
 import server from "../environment";
-import { SUPPORTED_LANGUAGES, translateText, speakTranslatedAudio } from "../utils/translationService";
+import { SUPPORTED_LANGUAGES, INDIAN_LANGUAGES, INTERNATIONAL_LANGUAGES, translateText, speakTranslatedAudio, queueTranslatedAudio, clearAudioQueue } from "../utils/translationService";
+import { streamingPlayer } from "../utils/streamingAudioPlayer";
 
 const server_url = server;
 
@@ -58,18 +59,27 @@ export default function VideoMeetComponent() {
   const [spokenLanguage, setSpokenLanguage] = useState("en");
   const [captionLanguage, setCaptionLanguage] = useState("en");
   const [audioDubbing, setAudioDubbing] = useState(false);
-  const [duckOriginalAudio, setDuckOriginalAudio] = useState(true);
+  const [originalAudioVolume, setOriginalAudioVolume] = useState("ducked"); // "ducked" (20%), "muted" (0%), "normal" (100%)
   const [showCaptionSettings, setShowCaptionSettings] = useState(false);
   const [activeCaption, setActiveCaption] = useState(null);
   const [autoTranslateChat, setAutoTranslateChat] = useState(false);
   const [chatTranslations, setChatTranslations] = useState({});
 
+  const getPeerAudioVolume = () => {
+    if (!audioDubbing) return 1.0;
+    if (originalAudioVolume === "muted") return 0.0;
+    if (originalAudioVolume === "ducked") return 0.2;
+    return 1.0;
+  };
+
   // Dynamic volume adjustment for remote peer audio when voice dubbing is active
   useEffect(() => {
+    const vol = getPeerAudioVolume();
     document.querySelectorAll("audio[data-remote='true']").forEach((audioEl) => {
-      audioEl.volume = audioDubbing && duckOriginalAudio ? 0.2 : 1.0;
+      audioEl.volume = vol;
     });
-  }, [audioDubbing, duckOriginalAudio]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioDubbing, originalAudioVolume]);
 
   // Refs for async callbacks
   const recognitionRef = useRef(null);
@@ -82,6 +92,7 @@ export default function VideoMeetComponent() {
   const captionTimeoutRef = useRef(null);
   const peerStreamsRef = useRef({});
   const dubbingTimeoutRef = useRef({});
+  const peerWordsPointerRef = useRef({});
 
   // Auto-unmute and resume any blocked audio contexts on user click/interaction
   useEffect(() => {
@@ -155,6 +166,8 @@ export default function VideoMeetComponent() {
       if (captionTimeoutRef.current) {
         clearTimeout(captionTimeoutRef.current);
       }
+      clearAudioQueue();
+      streamingPlayer.stop();
     };
   }, []);
 
@@ -350,11 +363,15 @@ export default function VideoMeetComponent() {
       };
 
       recognition.onend = () => {
-        // Auto-restart if captions and mic are still enabled
-        if (captionsEnabledRef.current && audioRef.current) {
-          try {
-            recognition.start();
-          } catch (e) {}
+        // Auto-restart if captions or dubbing and mic are still enabled
+        if ((captionsEnabledRef.current || audioDubbingRef.current) && audioRef.current) {
+          setTimeout(() => {
+            try {
+              if ((captionsEnabledRef.current || audioDubbingRef.current) && audioRef.current && recognitionRef.current) {
+                recognitionRef.current.start();
+              }
+            } catch (e) {}
+          }, 200);
         }
       };
 
@@ -367,7 +384,7 @@ export default function VideoMeetComponent() {
 
   // Manage speech recognition lifecycle
   useEffect(() => {
-    if (captionsEnabled && audio && !askForUsername) {
+    if ((captionsEnabled || audioDubbing) && audio && !askForUsername) {
       startSpeechRecognition();
     } else {
       stopSpeechRecognition();
@@ -377,10 +394,10 @@ export default function VideoMeetComponent() {
       stopSpeechRecognition();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [captionsEnabled, audio, spokenLanguage, askForUsername]);
+  }, [captionsEnabled, audioDubbing, audio, spokenLanguage, askForUsername]);
 
   const handleIncomingSpeechCaption = async (captionData) => {
-    if (!captionsEnabledRef.current) return;
+    if (!captionsEnabledRef.current && !audioDubbingRef.current) return;
     const { text, sender, spokenLang, isFinal, socketIdSender } = captionData;
     if (!text || !text.trim()) return;
 
@@ -408,32 +425,54 @@ export default function VideoMeetComponent() {
 
     const isMe = socketIdSender === socketIdRef.current;
 
-    setActiveCaption({
-      text: displayText,
-      originalText: text,
-      sender: isMe ? "You" : sender,
-      fromLang,
-      toLang: myTargetLang,
-      isFinal,
-      isMe,
-      id: Date.now() + Math.random(),
-    });
+    if (captionsEnabledRef.current) {
+      setActiveCaption({
+        text: displayText,
+        originalText: text,
+        sender: isMe ? "You" : sender,
+        fromLang,
+        toLang: myTargetLang,
+        isFinal,
+        isMe,
+        id: Date.now() + Math.random(),
+      });
+    }
 
-    // Voice Dubbing / Text-to-Speech for remote peers
+    // CONTINUOUS LIVE AUDIO DUBBING: Speaks streaming clauses in real-time as words are spoken!
     if (!isMe && audioDubbingRef.current) {
+      const words = text.trim().split(/\s+/);
+      const pointer = peerWordsPointerRef.current[socketIdSender] || 0;
+      const newWordsCount = words.length - pointer;
+
+      // Slice out completed clauses (every 3-4 words, on punctuation mark, or when finalized)
+      const hasPunctuation = /[।!?,.]/.test(text.slice(-2));
+      const shouldSpeakClause =
+        newWordsCount >= 4 ||
+        (hasPunctuation && newWordsCount >= 2) ||
+        (isFinal && newWordsCount > 0);
+
+      if (shouldSpeakClause) {
+        const clauseToTranslate = words.slice(pointer, pointer + newWordsCount).join(" ");
+        peerWordsPointerRef.current[socketIdSender] = words.length;
+
+        if (spokenLang !== myTargetLang) {
+          translateText(clauseToTranslate, myTargetLang, spokenLang, socketRef.current)
+            .then((res) => {
+              if (res && res.translatedText) {
+                queueTranslatedAudio(res.translatedText, myTargetLang);
+              }
+            })
+            .catch(() => {
+              queueTranslatedAudio(clauseToTranslate, myTargetLang);
+            });
+        } else {
+          queueTranslatedAudio(clauseToTranslate, myTargetLang);
+        }
+      }
+
+      // Reset pointer when sentence is finalized
       if (isFinal) {
-        if (dubbingTimeoutRef.current[socketIdSender]) {
-          clearTimeout(dubbingTimeoutRef.current[socketIdSender]);
-          delete dubbingTimeoutRef.current[socketIdSender];
-        }
-        speakTranslatedAudio(displayText, myTargetLang);
-      } else {
-        if (dubbingTimeoutRef.current[socketIdSender]) {
-          clearTimeout(dubbingTimeoutRef.current[socketIdSender]);
-        }
-        dubbingTimeoutRef.current[socketIdSender] = setTimeout(() => {
-          speakTranslatedAudio(displayText, myTargetLang);
-        }, 1200);
+        peerWordsPointerRef.current[socketIdSender] = 0;
       }
     }
 
@@ -732,6 +771,12 @@ export default function VideoMeetComponent() {
       socketRef.current.on("reaction", handleIncomingReaction);
       socketRef.current.on("live-speech-caption", handleIncomingSpeechCaption);
 
+      socketRef.current.on("stream-audio-translated", (data) => {
+        if (audioDubbingRef.current && data?.audioData) {
+          streamingPlayer.playPcmChunk(data.audioData);
+        }
+      });
+
       socketRef.current.on("user-media-state", (data) => {
         setMediaStates((prev) => ({
           ...prev,
@@ -748,6 +793,7 @@ export default function VideoMeetComponent() {
         }
         delete iceCandidatesQueue.current[id];
         delete peerStreamsRef.current[id];
+        delete peerWordsPointerRef.current[id];
         if (dubbingTimeoutRef.current[id]) {
           clearTimeout(dubbingTimeoutRef.current[id]);
           delete dubbingTimeoutRef.current[id];
@@ -790,6 +836,7 @@ export default function VideoMeetComponent() {
 
   const handleEndCall = () => {
     stopSpeechRecognition();
+    streamingPlayer.stop();
     if (typeof window !== "undefined" && window.speechSynthesis) {
       try {
         window.speechSynthesis.cancel();
@@ -798,6 +845,8 @@ export default function VideoMeetComponent() {
     if (captionTimeoutRef.current) {
       clearTimeout(captionTimeoutRef.current);
     }
+    clearAudioQueue();
+    peerWordsPointerRef.current = {};
     for (let id in dubbingTimeoutRef.current) {
       clearTimeout(dubbingTimeoutRef.current[id]);
     }
@@ -956,6 +1005,174 @@ export default function VideoMeetComponent() {
                   "& .MuiInputLabel-root.Mui-focused": { color: "#818cf8" },
                 }}
               />
+
+              {/* Language & Live Dubbing Card in Lobby */}
+              <div
+                style={{
+                  background: "rgba(15, 23, 42, 0.7)",
+                  borderRadius: "12px",
+                  padding: "12px 14px",
+                  border: "1px solid rgba(255, 255, 255, 0.12)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "10px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    color: "#818cf8",
+                    fontSize: "0.85rem",
+                    fontWeight: 600,
+                  }}
+                >
+                  <TranslateIcon style={{ fontSize: "1rem" }} />
+                  <span>Language & Live Translation</span>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: "10px",
+                  }}
+                >
+                  <div>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: "0.74rem",
+                        color: "#94a3b8",
+                        marginBottom: "4px",
+                        fontWeight: 500,
+                      }}
+                    >
+                      I will speak in (Mic)
+                    </label>
+                    <select
+                      value={spokenLanguage}
+                      onChange={(e) => setSpokenLanguage(e.target.value)}
+                      className={styles.captionSelect}
+                      style={{
+                        width: "100%",
+                        padding: "7px 10px",
+                        fontSize: "0.82rem",
+                        borderRadius: "8px",
+                      }}
+                    >
+                      <optgroup label="🇮🇳 Indian Regional Languages">
+                        {INDIAN_LANGUAGES.map((l) => (
+                          <option key={l.code} value={l.code}>
+                            {l.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="🌍 International Languages">
+                        {INTERNATIONAL_LANGUAGES.map((l) => (
+                          <option key={l.code} value={l.code}>
+                            {l.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label
+                      style={{
+                        display: "block",
+                        fontSize: "0.74rem",
+                        color: "#94a3b8",
+                        marginBottom: "4px",
+                        fontWeight: 500,
+                      }}
+                    >
+                      I want to hear & read in
+                    </label>
+                    <select
+                      value={captionLanguage}
+                      onChange={(e) => setCaptionLanguage(e.target.value)}
+                      className={styles.captionSelect}
+                      style={{
+                        width: "100%",
+                        padding: "7px 10px",
+                        fontSize: "0.82rem",
+                        borderRadius: "8px",
+                      }}
+                    >
+                      <optgroup label="🇮🇳 Indian Regional Languages">
+                        {INDIAN_LANGUAGES.map((l) => (
+                          <option key={l.code} value={l.code}>
+                            {l.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="🌍 International Languages">
+                        {INTERNATIONAL_LANGUAGES.map((l) => (
+                          <option key={l.code} value={l.code}>
+                            {l.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    paddingTop: "4px",
+                    flexWrap: "wrap",
+                    gap: "8px",
+                  }}
+                >
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      cursor: "pointer",
+                      color: "#f8fafc",
+                      fontSize: "0.8rem",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={captionsEnabled}
+                      onChange={(e) => setCaptionsEnabled(e.target.checked)}
+                      style={{ width: 15, height: 15, accentColor: "#6366f1" }}
+                    />
+                    <span>Live Subtitles</span>
+                  </label>
+
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      cursor: "pointer",
+                      color: "#f8fafc",
+                      fontSize: "0.8rem",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={audioDubbing}
+                      onChange={(e) => {
+                        setAudioDubbing(e.target.checked);
+                        if (e.target.checked) setCaptionsEnabled(true);
+                      }}
+                      style={{ width: 15, height: 15, accentColor: "#6366f1" }}
+                    />
+                    <span>🔊 Live Voice Dubbing</span>
+                  </label>
+                </div>
+              </div>
+
               <Button
                 variant="contained"
                 onClick={connect}
@@ -1260,11 +1477,20 @@ export default function VideoMeetComponent() {
                     value={spokenLanguage}
                     onChange={(e) => setSpokenLanguage(e.target.value)}
                   >
-                    {SUPPORTED_LANGUAGES.map((lang) => (
-                      <option key={lang.code} value={lang.code}>
-                        {lang.name}
-                      </option>
-                    ))}
+                    <optgroup label="🇮🇳 Indian Regional Languages">
+                      {INDIAN_LANGUAGES.map((lang) => (
+                        <option key={lang.code} value={lang.code}>
+                          {lang.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="🌍 International Languages">
+                      {INTERNATIONAL_LANGUAGES.map((lang) => (
+                        <option key={lang.code} value={lang.code}>
+                          {lang.name}
+                        </option>
+                      ))}
+                    </optgroup>
                   </select>
                 </div>
 
@@ -1277,11 +1503,20 @@ export default function VideoMeetComponent() {
                     value={captionLanguage}
                     onChange={(e) => setCaptionLanguage(e.target.value)}
                   >
-                    {SUPPORTED_LANGUAGES.map((lang) => (
-                      <option key={lang.code} value={lang.code}>
-                        {lang.name}
-                      </option>
-                    ))}
+                    <optgroup label="🇮🇳 Indian Regional Languages">
+                      {INDIAN_LANGUAGES.map((lang) => (
+                        <option key={lang.code} value={lang.code}>
+                          {lang.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="🌍 International Languages">
+                      {INTERNATIONAL_LANGUAGES.map((lang) => (
+                        <option key={lang.code} value={lang.code}>
+                          {lang.name}
+                        </option>
+                      ))}
+                    </optgroup>
                   </select>
                 </div>
 
@@ -1352,23 +1587,22 @@ export default function VideoMeetComponent() {
                   >
                     <div className={styles.captionToggleInfo}>
                       <span className={styles.captionToggleTitle} style={{ fontSize: "0.82rem" }}>
-                        Lower Friend's Voice (Ducking)
+                        Original Voice Volume
                       </span>
                       <span className={styles.captionToggleDesc} style={{ fontSize: "0.72rem" }}>
-                        Quiet original voice so English translation is clear
+                        Hear original Hindi vs translated English
                       </span>
                     </div>
-                    <input
-                      type="checkbox"
-                      checked={duckOriginalAudio}
-                      onChange={(e) => setDuckOriginalAudio(e.target.checked)}
-                      style={{
-                        width: 16,
-                        height: 16,
-                        cursor: "pointer",
-                        accentColor: "#6366f1",
-                      }}
-                    />
+                    <select
+                      value={originalAudioVolume}
+                      onChange={(e) => setOriginalAudioVolume(e.target.value)}
+                      className={styles.captionSelect}
+                      style={{ padding: "4px 8px", fontSize: "0.78rem", width: "auto" }}
+                    >
+                      <option value="ducked">Ducked (20% Quiet)</option>
+                      <option value="muted">Mute (0% English only)</option>
+                      <option value="normal">Normal (100%)</option>
+                    </select>
                   </div>
                 )}
 
@@ -1477,7 +1711,7 @@ export default function VideoMeetComponent() {
                           if (audioEl.srcObject !== videoItem.stream) {
                             audioEl.srcObject = videoItem.stream;
                           }
-                          audioEl.volume = audioDubbing && duckOriginalAudio ? 0.2 : 1.0;
+                          audioEl.volume = getPeerAudioVolume();
                           audioEl.play().catch((err) => {
                             console.warn("Audio element autoplay waiting for user gesture:", err);
                           });
@@ -1495,6 +1729,7 @@ export default function VideoMeetComponent() {
                         }
                       }}
                       autoPlay
+                      muted
                       playsInline
                       style={{
                         width: "100%",
