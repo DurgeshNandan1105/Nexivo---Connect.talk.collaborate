@@ -1,4 +1,5 @@
 import { Server } from "socket.io"
+import { translateText } from "./translate.controller.js";
 
 let connections = {}
 let messages = {}
@@ -114,6 +115,41 @@ const connectToSocket = (server) => {
                         });
                     }
                 });
+            }
+        });
+
+        socket.on("live-speech-caption", (captionData) => {
+            const [matchingRoom, found] = Object.entries(connections)
+            .reduce(([room, isFound], [roomKey, roomValue]) => {
+                if(!isFound && roomValue.includes(socket.id)){
+                    return [roomKey, true];
+                }
+                return [room, isFound];
+            }, ['', false]);
+
+            if(found === true) {
+                const payload = {
+                    ...captionData,
+                    socketIdSender: socket.id,
+                    timestamp: Date.now()
+                };
+                connections[matchingRoom].forEach((elem) => {
+                    io.to(elem).emit("live-speech-caption", payload);
+                });
+            }
+        });
+
+        socket.on("translate-text", async (data, callback) => {
+            try {
+                const { text, to = "en", from = "auto" } = data || {};
+                const result = await translateText(text, to, from);
+                if (typeof callback === "function") {
+                    callback(null, result);
+                }
+            } catch (err) {
+                if (typeof callback === "function") {
+                    callback(err.message, null);
+                }
             }
         });
 
