@@ -22,9 +22,9 @@ const connectToSocket = (server) => {
     const io = new Server(server, {
         cors: {
             origin: "*",
-            methods: ["GET", "POST"],
+            methods: ["GET", "POST", "OPTIONS"],
             allowedHeaders: ["*"],
-            credentials: true
+            credentials: false
         }
     });
 

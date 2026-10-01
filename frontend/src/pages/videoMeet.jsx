@@ -28,6 +28,8 @@ const peerConfigConnections = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun.cloudflare.com:3478" },
+    { urls: "stun:stun.services.mozilla.com" },
   ],
 };
 
@@ -235,24 +237,33 @@ export default function VideoMeetComponent() {
   };
 
   const handleRemoteStream = (id, stream) => {
-    if (stream && stream.getAudioTracks) {
+    if (!stream) return;
+    if (stream.getAudioTracks) {
       stream.getAudioTracks().forEach((track) => {
         track.enabled = true;
       });
     }
+    if (stream.getVideoTracks) {
+      stream.getVideoTracks().forEach((track) => {
+        track.enabled = true;
+      });
+    }
+
+    // Create fresh MediaStream reference with current tracks so DOM video/audio elements rebind
+    const activeStream = new MediaStream(stream.getTracks());
 
     setVideos((prevVideos) => {
       const videoExists = prevVideos.find((v) => v.socketId === id);
       if (videoExists) {
         return prevVideos.map((v) =>
-          v.socketId === id ? { ...v, stream, version: Date.now() } : v
+          v.socketId === id ? { ...v, stream: activeStream, version: Date.now() } : v
         );
       } else {
         return [
           ...prevVideos,
           {
             socketId: id,
-            stream,
+            stream: activeStream,
             version: Date.now(),
             autoplay: true,
             playsinline: true,
@@ -266,7 +277,12 @@ export default function VideoMeetComponent() {
     if (!window.localStream) return;
     try {
       const senders = pc.getSenders ? pc.getSenders() : [];
-      window.localStream.getTracks().forEach((track) => {
+      // Deterministic order: Always Audio first, then Video across ALL peers!
+      const audioTracks = window.localStream.getAudioTracks();
+      const videoTracks = window.localStream.getVideoTracks();
+      const orderedTracks = [...audioTracks, ...videoTracks];
+
+      orderedTracks.forEach((track) => {
         const alreadyAdded = senders.some((s) => s.track && s.track.id === track.id);
         if (!alreadyAdded) {
           pc.addTrack(track, window.localStream);
@@ -357,7 +373,7 @@ export default function VideoMeetComponent() {
       };
 
       recognition.onerror = (event) => {
-        if (event.error !== "no-speech") {
+        if (event.error !== "no-speech" && event.error !== "aborted") {
           console.warn("Speech recognition error:", event.error);
         }
       };
@@ -695,45 +711,59 @@ export default function VideoMeetComponent() {
 
         if (signal.sdp) {
           const pc = connections[fromId] || createPeerConnection(fromId);
-          addTracksToPeer(pc);
 
-          pc.setRemoteDescription(new RTCSessionDescription(signal.sdp))
-            .then(() => {
-              // Flush any queued ICE candidates that arrived before setRemoteDescription resolved
-              if (iceCandidatesQueue.current[fromId] && iceCandidatesQueue.current[fromId].length > 0) {
-                const queue = iceCandidatesQueue.current[fromId];
-                iceCandidatesQueue.current[fromId] = [];
-                queue.forEach((candidate) => {
-                  pc.addIceCandidate(new RTCIceCandidate(candidate)).catch((e) =>
-                    console.log("addQueuedCandidate error:", e)
+          if (signal.sdp.type === "offer") {
+            pc.setRemoteDescription(new RTCSessionDescription(signal.sdp))
+              .then(() => {
+                // Attach ordered local tracks so answer transceivers match the offer's m-line order
+                addTracksToPeer(pc);
+
+                // Flush any queued ICE candidates that arrived before setRemoteDescription resolved
+                if (iceCandidatesQueue.current[fromId] && iceCandidatesQueue.current[fromId].length > 0) {
+                  const queue = iceCandidatesQueue.current[fromId];
+                  iceCandidatesQueue.current[fromId] = [];
+                  queue.forEach((candidate) => {
+                    pc.addIceCandidate(new RTCIceCandidate(candidate)).catch((e) =>
+                      console.log("addQueuedCandidate error:", e)
+                    );
+                  });
+                }
+
+                return pc.createAnswer();
+              })
+              .then((description) => pc.setLocalDescription(description))
+              .then(() => {
+                if (socketRef.current) {
+                  socketRef.current.emit(
+                    "signal",
+                    fromId,
+                    JSON.stringify({
+                      sdp: pc.localDescription,
+                    })
                   );
-                });
-              }
-
-              if (signal.sdp.type === "offer") {
-                pc.createAnswer({
-                  offerToReceiveAudio: true,
-                  offerToReceiveVideo: true,
+                }
+              })
+              .catch((e) => console.log("createAnswer / setRemote error:", e));
+          } else if (signal.sdp.type === "answer") {
+            // Guard: only apply answer if peer connection is expecting an answer
+            if (pc.signalingState === "have-local-offer") {
+              pc.setRemoteDescription(new RTCSessionDescription(signal.sdp))
+                .then(() => {
+                  if (iceCandidatesQueue.current[fromId] && iceCandidatesQueue.current[fromId].length > 0) {
+                    const queue = iceCandidatesQueue.current[fromId];
+                    iceCandidatesQueue.current[fromId] = [];
+                    queue.forEach((candidate) => {
+                      pc.addIceCandidate(new RTCIceCandidate(candidate)).catch((e) =>
+                        console.log("addQueuedCandidate error:", e)
+                      );
+                    });
+                  }
                 })
-                  .then((description) => {
-                    pc.setLocalDescription(description)
-                      .then(() => {
-                        if (socketRef.current) {
-                          socketRef.current.emit(
-                            "signal",
-                            fromId,
-                            JSON.stringify({
-                              sdp: pc.localDescription,
-                            })
-                          );
-                        }
-                      })
-                      .catch((e) => console.log(e));
-                  })
-                  .catch((e) => console.log(e));
-              }
-            })
-            .catch((e) => console.log("setRemoteDescription error:", e));
+                .catch((e) => console.log("setRemoteDescription answer error:", e));
+            } else {
+              console.log("Skipped answer because signalingState is:", pc.signalingState);
+            }
+          }
         }
 
         if (signal.ice) {

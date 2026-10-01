@@ -36,8 +36,8 @@ export default function Authentication() {
   // Pre-warm backend on page load so cold start is triggered before form submission
   React.useEffect(() => {
     try {
-      fetch(`${server}/api/v1/users/login`, {
-        method: "OPTIONS",
+      fetch(`${server}/health`, {
+        method: "GET",
       }).catch(() => {});
     } catch (e) {}
   }, []);

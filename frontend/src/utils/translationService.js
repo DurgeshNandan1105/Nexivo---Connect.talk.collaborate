@@ -167,7 +167,9 @@ const processNextInQueue = () => {
     };
 
     utterance.onerror = (e) => {
-      console.warn("Speech queue utterance error:", e);
+      if (e.error !== "canceled" && e.error !== "interrupted") {
+        console.warn("Speech queue utterance error:", e.error || e);
+      }
       setTimeout(processNextInQueue, 15);
     };
 
@@ -243,7 +245,9 @@ export const speakTranslatedAudio = (text, langCode = "en") => {
         }
 
         utterance.onerror = (e) => {
-          console.warn("SpeechSynthesis utterance error:", e);
+          if (e.error !== "canceled" && e.error !== "interrupted") {
+            console.warn("SpeechSynthesis utterance error:", e.error || e);
+          }
         };
 
         window.speechSynthesis.speak(utterance);
