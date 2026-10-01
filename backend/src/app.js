@@ -24,7 +24,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
 
 // Explicit preflight handler ensuring OPTIONS requests succeed across reverse proxies
 app.use((req, res, next) => {

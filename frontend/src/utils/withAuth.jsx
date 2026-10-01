@@ -16,6 +16,7 @@ const withAuth = (WrappedComponent ) => {
             if(!isAuthenticated()) {
                 router("/auth")
             }
+            // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [])
 
         return <WrappedComponent {...props} />
