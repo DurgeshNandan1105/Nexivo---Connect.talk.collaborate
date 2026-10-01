@@ -12,67 +12,66 @@ import StopScreenShareIcon from "@mui/icons-material/StopScreenShare";
 import ChatIcon from "@mui/icons-material/Chat";
 import SentimentSatisfiedAltIcon from "@mui/icons-material/SentimentSatisfiedAlt";
 import CloseIcon from "@mui/icons-material/Close";
-import { ALL_LANGUAGES } from "../utils/languages";
 import server from "../environment";
 
 const server_url = server;
 
-var connections = {};
+let connections = {};
 
 const peerConfigConnections = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+  ],
 };
 
 export default function VideoMeetComponent() {
-  var socketRef = useRef();
-  let socketIdRef = useRef();
-  let localVideoref = useRef();
+  const socketRef = useRef();
+  const socketIdRef = useRef();
+  const localVideoref = useRef();
+  const iceCandidatesQueue = useRef({});
 
-  let [videoAvailable, setVideoAvailable] = useState(true);
-  let [audioAvailable, setAudioAvailable] = useState(true);
-  let [video, setVideo] = useState(true);
-  let [audio, setAudio] = useState(true);
-  let [screen, setScreen] = useState();
-  let [showModal, setModal] = useState(true);
-  let [screenAvailable, setScreenAvailable] = useState();
-  let [messages, setMessages] = useState([]);
-  let [message, setMessage] = useState("");
-  let [newMessages, setNewMessages] = useState(0);
-  let [askForUsername, setAskForUsername] = useState(true);
-  let [username, setUsername] = useState("");
+  const [video, setVideo] = useState(true);
+  const [audio, setAudio] = useState(true);
+  const [screen, setScreen] = useState();
+  const [showModal, setModal] = useState(false);
+  const [screenAvailable, setScreenAvailable] = useState();
+  const [messages, setMessages] = useState([]);
+  const [message, setMessage] = useState("");
+  const [newMessages, setNewMessages] = useState(0);
+  const [askForUsername, setAskForUsername] = useState(true);
+  const [username, setUsername] = useState("");
 
   const [showReactions, setShowReactions] = useState(false);
   const [activeReactions, setActiveReactions] = useState([]);
-  const [mediaStates, setMediaStates] = useState({}); // { [socketId]: { video: boolean, audio: boolean } }
+  const [mediaStates, setMediaStates] = useState({});
 
-  const [mySpeakingLang, setMySpeakingLang] = useState("en-US");
-  const [myListeningLang, setMyListeningLang] = useState("original");
-  const myListeningLangRef = useRef(myListeningLang);
-  myListeningLangRef.current = myListeningLang;
-  const [liveCaption, setLiveCaption] = useState(null);
+  const [videos, setVideos] = useState([]);
 
-  const videoRef = useRef([]);
-  let [videos, setVideos] = useState([]);
-  const recognitionRef = useRef(null);
-
-  // Preload speech synthesis voices on mount
-  useEffect(() => {
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.getVoices();
-      window.speechSynthesis.onvoiceschanged = () => {
-        window.speechSynthesis.getVoices();
-      };
+  // Normalize room path across any host, port or trailing slashes
+  const getRoomPath = () => {
+    try {
+      return window.location.pathname.toLowerCase().replace(/\/+$/, "") || "/";
+    } catch (e) {
+      return window.location.pathname || "/";
     }
-  }, []);
+  };
 
   // Request permissions once on mount
   useEffect(() => {
     getPermissions();
 
     return () => {
-      if (recognitionRef.current) {
+      for (let id in connections) {
         try {
-          recognitionRef.current.abort();
+          connections[id].close();
+        } catch (e) {}
+      }
+      connections = {};
+      if (socketRef.current) {
+        try {
+          socketRef.current.disconnect();
         } catch (e) {}
       }
     };
@@ -80,13 +79,13 @@ export default function VideoMeetComponent() {
 
   const getPermissions = async () => {
     try {
-      if (navigator.mediaDevices.getDisplayMedia) {
+      if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
         setScreenAvailable(true);
       } else {
         setScreenAvailable(false);
       }
 
-      // If active stream already exists, reuse it
+      // If active stream already exists and has live tracks, reuse it
       if (
         window.localStream &&
         window.localStream.active &&
@@ -104,25 +103,17 @@ export default function VideoMeetComponent() {
           video: true,
           audio: true,
         });
-        setVideoAvailable(true);
-        setAudioAvailable(true);
       } catch (err) {
         console.warn("Could not get both video and audio, trying individual tracks:", err);
         let vidStream = null;
         try {
           vidStream = await navigator.mediaDevices.getUserMedia({ video: true });
-          setVideoAvailable(true);
-        } catch (e) {
-          setVideoAvailable(false);
-        }
+        } catch (e) {}
 
         let audStream = null;
         try {
           audStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          setAudioAvailable(true);
-        } catch (e) {
-          setAudioAvailable(false);
-        }
+        } catch (e) {}
 
         if (vidStream && audStream) {
           userMediaStream = new MediaStream([
@@ -149,166 +140,41 @@ export default function VideoMeetComponent() {
     }
   };
 
-  // Live Speech Recognition for Voice Translation
-  useEffect(() => {
-    // Only listen when in-call and unmuted
-    if (askForUsername || !audio) {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.abort();
-        } catch (e) {}
-        recognitionRef.current = null;
+  const handleRemoteStream = (id, stream) => {
+    setVideos((prevVideos) => {
+      const videoExists = prevVideos.find((v) => v.socketId === id);
+      if (videoExists) {
+        return prevVideos.map((v) =>
+          v.socketId === id ? { ...v, stream } : v
+        );
+      } else {
+        return [
+          ...prevVideos,
+          {
+            socketId: id,
+            stream,
+            autoplay: true,
+            playsinline: true,
+          },
+        ];
       }
-      return;
-    }
-
-    const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
-
-    let active = true;
-    const recognition = new SpeechRecognition();
-    recognitionRef.current = recognition;
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = mySpeakingLang;
-
-    recognition.onresult = (event) => {
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          const transcript = event.results[i][0].transcript.trim();
-          if (transcript && socketRef.current) {
-            // Show feedback on speaker's own screen
-            setLiveCaption({ sender: "You", text: transcript });
-            setTimeout(() => setLiveCaption(null), 4000);
-
-            socketRef.current.emit("send-speech-chunk", {
-              text: transcript,
-              sourceLang: mySpeakingLang.split("-")[0],
-              sender: username || "Guest",
-            });
-          }
-        }
-      }
-    };
-
-    recognition.onerror = (event) => {
-      console.warn("Speech recognition error:", event.error);
-      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
-        active = false;
-      }
-    };
-
-    recognition.onend = () => {
-      if (active) {
-        setTimeout(() => {
-          if (active && recognitionRef.current === recognition) {
-            try {
-              recognition.start();
-            } catch (e) {}
-          }
-        }, 300);
-      }
-    };
-
-    try {
-      recognition.start();
-    } catch (e) {
-      console.warn("Could not start speech recognition:", e);
-    }
-
-    return () => {
-      active = false;
-      try {
-        recognition.abort();
-      } catch (e) {}
-      if (recognitionRef.current === recognition) {
-        recognitionRef.current = null;
-      }
-    };
-  }, [askForUsername, audio, mySpeakingLang, username]);
-
-  const handleIncomingSpeechChunk = (data) => {
-    if (data.socketIdSender === socketIdRef.current) return;
-
-    // This handler is registered once when the socket connects, so read the
-    // ref to honor language changes made after joining the call.
-    const listeningLang = myListeningLangRef.current;
-    if (listeningLang === "original") {
-      setLiveCaption({ sender: data.sender, text: data.text });
-      setTimeout(() => setLiveCaption(null), 5000);
-    } else {
-      const selectedLangObj = ALL_LANGUAGES.find((l) => l.code === listeningLang);
-      const targetLang = selectedLangObj ? selectedLangObj.iso : "en";
-      if (socketRef.current) {
-        socketRef.current.emit("request-translation", {
-          text: data.text,
-          sourceLang: data.sourceLang || "auto",
-          targetLang: targetLang,
-        });
-      }
-    }
+    });
   };
 
-  const handleDeliverTranslatedVoice = async (data) => {
-    let textToSpeak = data.translatedText;
-
-    // Fallback translation if server returned identical text but different target
-    if (data.targetLang && data.targetLang !== "en" && data.translatedText === data.originalText) {
-      try {
-        const res = await fetch(
-          `https://api.mymemory.translated.net/get?q=${encodeURIComponent(data.originalText)}&langpair=autodetect|${data.targetLang}`
-        );
-        const json = await res.json();
-        if (json && json.responseData && json.responseData.translatedText) {
-          textToSpeak = json.responseData.translatedText;
+  const addTracksToPeer = (pc) => {
+    if (!window.localStream) return;
+    try {
+      const senders = pc.getSenders ? pc.getSenders() : [];
+      window.localStream.getTracks().forEach((track) => {
+        const alreadyAdded = senders.some((s) => s.track && s.track.id === track.id);
+        if (!alreadyAdded) {
+          pc.addTrack(track, window.localStream);
         }
-      } catch (e) {}
-    }
-
-    setLiveCaption({ sender: "Translation", text: textToSpeak });
-    setTimeout(() => setLiveCaption(null), 5000);
-
-    if ("speechSynthesis" in window) {
-      try {
-        window.speechSynthesis.cancel();
-        window.speechSynthesis.resume();
-      } catch (e) {}
-
-      const utterance = new SpeechSynthesisUtterance(textToSpeak);
-      const selectedLangObj = ALL_LANGUAGES.find((l) => l.iso === data.targetLang);
-      const targetCode = selectedLangObj ? selectedLangObj.code : "en-US";
-      utterance.lang = targetCode;
-
-      const voices = window.speechSynthesis.getVoices();
-      const matchingVoice = voices.find(
-        (v) =>
-          v.lang === targetCode ||
-          v.lang.replace("_", "-").toLowerCase().startsWith(data.targetLang.toLowerCase())
-      );
-      if (matchingVoice) {
-        utterance.voice = matchingVoice;
-      }
-      utterance.rate = 1.0;
-
-      // Lower remote audio during synthesized speech
-      const remoteVideos = document.querySelectorAll("video[data-socket]");
-      remoteVideos.forEach((v) => {
-        v.volume = 0.15;
       });
-
-      const restoreVolume = () => {
-        remoteVideos.forEach((v) => {
-          v.volume = 1.0;
-        });
-        window.activeSpeechUtterance = null;
-      };
-
-      utterance.onend = restoreVolume;
-      utterance.onerror = restoreVolume;
-
-      window.activeSpeechUtterance = utterance;
-      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      try {
+        pc.addStream(window.localStream);
+      } catch (err) {}
     }
   };
 
@@ -331,8 +197,7 @@ export default function VideoMeetComponent() {
     }, 2500);
   };
 
-  let broadcastMediaState = (nextVid, nextAud) => {
-    // 1. Direct socket event
+  const broadcastMediaState = (nextVid, nextAud) => {
     if (socketRef.current) {
       socketRef.current.emit("user-media-state", {
         video: nextVid,
@@ -340,7 +205,6 @@ export default function VideoMeetComponent() {
       });
     }
 
-    // 2. Dual relay via signal to all peers
     for (let id in connections) {
       if (id === socketIdRef.current) continue;
       try {
@@ -359,16 +223,14 @@ export default function VideoMeetComponent() {
     let nextVideo = !video;
     setVideo(nextVideo);
     if (window.localStream) {
-      let videoTrack = window.localStream.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.enabled = nextVideo;
-      }
+      window.localStream.getVideoTracks().forEach((track) => {
+        track.enabled = nextVideo;
+      });
     }
     if (localVideoref.current && localVideoref.current.srcObject) {
-      let videoTrack = localVideoref.current.srcObject.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.enabled = nextVideo;
-      }
+      localVideoref.current.srcObject.getVideoTracks().forEach((track) => {
+        track.enabled = nextVideo;
+      });
     }
     broadcastMediaState(nextVideo, audio);
   };
@@ -377,16 +239,14 @@ export default function VideoMeetComponent() {
     let nextAudio = !audio;
     setAudio(nextAudio);
     if (window.localStream) {
-      let audioTrack = window.localStream.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = nextAudio;
-      }
+      window.localStream.getAudioTracks().forEach((track) => {
+        track.enabled = nextAudio;
+      });
     }
     if (localVideoref.current && localVideoref.current.srcObject) {
-      let audioTrack = localVideoref.current.srcObject.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = nextAudio;
-      }
+      localVideoref.current.srcObject.getAudioTracks().forEach((track) => {
+        track.enabled = nextAudio;
+      });
     }
     broadcastMediaState(video, nextAudio);
   };
@@ -405,7 +265,11 @@ export default function VideoMeetComponent() {
   const sendOffer = (peerId) => {
     const pc = connections[peerId];
     if (!pc) return;
-    pc.createOffer()
+    addTracksToPeer(pc);
+    pc.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true,
+    })
       .then((description) => pc.setLocalDescription(description))
       .then(() => {
         if (socketRef.current) {
@@ -416,12 +280,14 @@ export default function VideoMeetComponent() {
           );
         }
       })
-      .catch((e) => console.log(e));
+      .catch((e) => console.log("sendOffer error:", e));
   };
 
   let getDislayMediaSuccess = (stream) => {
     try {
-      window.localStream.getTracks().forEach((track) => track.stop());
+      if (window.localStream) {
+        window.localStream.getTracks().forEach((track) => track.stop());
+      }
     } catch (e) {
       console.log(e);
     }
@@ -433,16 +299,22 @@ export default function VideoMeetComponent() {
 
     Object.keys(connections).forEach((id) => {
       if (id === socketIdRef.current) return;
-      try {
-        connections[id].addStream(window.localStream);
-      } catch (e) {}
+      addTracksToPeer(connections[id]);
       sendOffer(id);
     });
 
     stream.getTracks().forEach((track) => {
       track.onended = () => {
         setScreen(false);
-        getPermissions();
+        getPermissions().then((camStream) => {
+          if (camStream) {
+            Object.keys(connections).forEach((id) => {
+              if (id === socketIdRef.current) return;
+              addTracksToPeer(connections[id]);
+              sendOffer(id);
+            });
+          }
+        });
       };
     });
   };
@@ -451,6 +323,7 @@ export default function VideoMeetComponent() {
     if (screen !== undefined) {
       getDislayMedia();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
 
   let handleScreen = () => {
@@ -458,7 +331,10 @@ export default function VideoMeetComponent() {
   };
 
   const createPeerConnection = (id) => {
-    if (connections[id]) return connections[id];
+    if (connections[id]) {
+      addTracksToPeer(connections[id]);
+      return connections[id];
+    }
 
     const pc = new RTCPeerConnection(peerConfigConnections);
     connections[id] = pc;
@@ -468,50 +344,34 @@ export default function VideoMeetComponent() {
         socketRef.current.emit(
           "signal",
           id,
-          JSON.stringify({ ice: event.candidate }),
+          JSON.stringify({ ice: event.candidate })
         );
       }
     };
 
-    pc.onaddstream = (event) => {
-      console.log("Remote stream added for id: ", id);
-      setVideos((prevVideos) => {
-        const videoExists = prevVideos.find((v) => v.socketId === id);
-        if (videoExists) {
-          const updated = prevVideos.map((v) =>
-            v.socketId === id ? { ...v, stream: event.stream } : v
-          );
-          videoRef.current = updated;
-          return updated;
-        } else {
-          const newVideo = {
-            socketId: id,
-            stream: event.stream,
-            autoplay: true,
-            playsinline: true,
-          };
-          const updated = [...prevVideos, newVideo];
-          videoRef.current = updated;
-          return updated;
-        }
-      });
+    // Modern WebRTC track listener
+    pc.ontrack = (event) => {
+      console.log("Remote track received for id: ", id, event.track.kind);
+      const remoteStream = event.streams && event.streams[0]
+        ? event.streams[0]
+        : new MediaStream([event.track]);
+      handleRemoteStream(id, remoteStream);
     };
 
-    if (window.localStream) {
-      pc.addStream(window.localStream);
-    } else {
-      let blackSilence = (...args) =>
-        new MediaStream([black(...args), silence()]);
-      window.localStream = blackSilence();
-      pc.addStream(window.localStream);
-    }
+    // Legacy fallback listener
+    pc.onaddstream = (event) => {
+      console.log("Remote stream added for id: ", id);
+      handleRemoteStream(id, event.stream);
+    };
+
+    addTracksToPeer(pc);
 
     return pc;
   };
 
-  let gotMessageFromServer = (fromId, message) => {
+  const gotMessageFromServer = (fromId, message) => {
     try {
-      var signal = JSON.parse(message);
+      const signal = JSON.parse(message);
 
       if (fromId !== socketIdRef.current) {
         if (signal.mediaState) {
@@ -523,34 +383,58 @@ export default function VideoMeetComponent() {
 
         if (signal.sdp) {
           const pc = connections[fromId] || createPeerConnection(fromId);
+          addTracksToPeer(pc);
+
           pc.setRemoteDescription(new RTCSessionDescription(signal.sdp))
             .then(() => {
+              // Flush any queued ICE candidates that arrived before setRemoteDescription resolved
+              if (iceCandidatesQueue.current[fromId] && iceCandidatesQueue.current[fromId].length > 0) {
+                const queue = iceCandidatesQueue.current[fromId];
+                iceCandidatesQueue.current[fromId] = [];
+                queue.forEach((candidate) => {
+                  pc.addIceCandidate(new RTCIceCandidate(candidate)).catch((e) =>
+                    console.log("addQueuedCandidate error:", e)
+                  );
+                });
+              }
+
               if (signal.sdp.type === "offer") {
-                pc.createAnswer()
+                pc.createAnswer({
+                  offerToReceiveAudio: true,
+                  offerToReceiveVideo: true,
+                })
                   .then((description) => {
                     pc.setLocalDescription(description)
                       .then(() => {
-                        socketRef.current.emit(
-                          "signal",
-                          fromId,
-                          JSON.stringify({
-                            sdp: pc.localDescription,
-                          }),
-                        );
+                        if (socketRef.current) {
+                          socketRef.current.emit(
+                            "signal",
+                            fromId,
+                            JSON.stringify({
+                              sdp: pc.localDescription,
+                            })
+                          );
+                        }
                       })
                       .catch((e) => console.log(e));
                   })
                   .catch((e) => console.log(e));
               }
             })
-            .catch((e) => console.log(e));
+            .catch((e) => console.log("setRemoteDescription error:", e));
         }
 
         if (signal.ice) {
           const pc = connections[fromId];
-          if (pc) {
-            pc.addIceCandidate(new RTCIceCandidate(signal.ice))
-              .catch((e) => console.log(e));
+          if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+            pc.addIceCandidate(new RTCIceCandidate(signal.ice)).catch((e) =>
+              console.log("addIceCandidate error:", e)
+            );
+          } else {
+            if (!iceCandidatesQueue.current[fromId]) {
+              iceCandidatesQueue.current[fromId] = [];
+            }
+            iceCandidatesQueue.current[fromId].push(signal.ice);
           }
         }
       }
@@ -559,7 +443,7 @@ export default function VideoMeetComponent() {
     }
   };
 
-  let connectToSocketServer = () => {
+  const connectToSocketServer = () => {
     if (socketRef.current) return;
 
     socketRef.current = io.connect(server_url, { secure: false });
@@ -567,13 +451,12 @@ export default function VideoMeetComponent() {
     socketRef.current.on("signal", gotMessageFromServer);
 
     socketRef.current.on("connect", () => {
-      socketRef.current.emit("join-call", window.location.href);
+      const roomPath = getRoomPath();
+      socketRef.current.emit("join-call", roomPath);
       socketIdRef.current = socketRef.current.id;
 
       socketRef.current.on("chat-message", addMessage);
       socketRef.current.on("reaction", handleIncomingReaction);
-      socketRef.current.on("receive-speech-chunk", handleIncomingSpeechChunk);
-      socketRef.current.on("deliver-translated-voice", handleDeliverTranslatedVoice);
 
       socketRef.current.on("user-media-state", (data) => {
         setMediaStates((prev) => ({
@@ -589,6 +472,7 @@ export default function VideoMeetComponent() {
           } catch (e) {}
           delete connections[id];
         }
+        delete iceCandidatesQueue.current[id];
         setVideos((videos) => videos.filter((video) => video.socketId !== id));
         setMediaStates((prev) => {
           const next = { ...prev };
@@ -605,8 +489,14 @@ export default function VideoMeetComponent() {
           createPeerConnection(socketListId);
         });
 
-        // Broadcast current media state
-        broadcastMediaState(video, audio);
+        // Broadcast current media state based on actual live tracks
+        const curVid = window.localStream
+          ? window.localStream.getVideoTracks().some((t) => t.enabled)
+          : true;
+        const curAud = window.localStream
+          ? window.localStream.getAudioTracks().some((t) => t.enabled)
+          : true;
+        broadcastMediaState(curVid, curAud);
 
         if (id === socketIdRef.current) {
           Object.keys(connections).forEach((id2) => {
@@ -619,26 +509,7 @@ export default function VideoMeetComponent() {
     });
   };
 
-  let silence = () => {
-    let ctx = new AudioContext();
-    let oscillator = ctx.createOscillator();
-    let dst = oscillator.connect(ctx.createMediaStreamDestination());
-    oscillator.start();
-    ctx.resume();
-    return Object.assign(dst.stream.getAudioTracks()[0], { enabled: false });
-  };
-
-  let black = ({ width = 640, height = 480 } = {}) => {
-    let canvas = Object.assign(document.createElement("canvas"), {
-      width,
-      height,
-    });
-    canvas.getContext("2d").fillRect(0, 0, width, height);
-    let stream = canvas.captureStream();
-    return Object.assign(stream.getVideoTracks()[0], { enabled: false });
-  };
-
-  let handleEndCall = () => {
+  const handleEndCall = () => {
     try {
       if (window.localStream) {
         window.localStream.getTracks().forEach((track) => track.stop());
@@ -661,7 +532,7 @@ export default function VideoMeetComponent() {
     window.location.href = "/";
   };
 
-  let handleMessage = (e) => {
+  const handleMessage = (e) => {
     setMessage(e.target.value);
   };
 
@@ -675,7 +546,7 @@ export default function VideoMeetComponent() {
     }
   };
 
-  let sendMessage = () => {
+  const sendMessage = () => {
     if (!message.trim()) return;
     if (socketRef.current) {
       socketRef.current.emit("chat-message", message, username);
@@ -683,14 +554,13 @@ export default function VideoMeetComponent() {
     setMessage("");
   };
 
-  let connect = async () => {
-    // Do not create peer connections until the real microphone stream is ready.
-    // Otherwise peers can negotiate the silent placeholder stream created below.
-    const stream = await getPermissions();
+  const connect = async () => {
+    let stream = window.localStream;
+    if (!stream || !stream.active) {
+      stream = await getPermissions();
+    }
     const hasVideo = !!stream?.getVideoTracks().some((track) => track.readyState === "live");
     const hasAudio = !!stream?.getAudioTracks().some((track) => track.readyState === "live");
-    setVideoAvailable(hasVideo);
-    setAudioAvailable(hasAudio);
     setVideo(hasVideo);
     setAudio(hasAudio);
     setAskForUsername(false);
@@ -912,41 +782,7 @@ export default function VideoMeetComponent() {
             >
               <SentimentSatisfiedAltIcon />
             </IconButton>
-
-            <select
-              value={mySpeakingLang}
-              onChange={(e) => setMySpeakingLang(e.target.value)}
-              className={styles.langSelect}
-              title="Select language you speak"
-            >
-              {ALL_LANGUAGES.map((lang) => (
-                <option key={lang.code} value={lang.code}>
-                  Speak: {lang.label}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={myListeningLang}
-              onChange={(e) => setMyListeningLang(e.target.value)}
-              className={styles.langSelect}
-              title="Select voice language you want to hear"
-            >
-              <option value="original">Listen: Original Voice</option>
-              {ALL_LANGUAGES.map((lang) => (
-                <option key={lang.code} value={lang.code}>
-                  Listen: {lang.label} Voice
-                </option>
-              ))}
-            </select>
           </div>
-
-          {liveCaption && (
-            <div className={styles.liveCaptionOverlay}>
-              <span className={styles.captionSender}>{liveCaption.sender}:</span>
-              <span className={styles.captionText}>{liveCaption.text}</span>
-            </div>
-          )}
 
           {showReactions && (
             <div className={styles.reactionPicker}>
@@ -1012,9 +848,9 @@ export default function VideoMeetComponent() {
               </div>
             ) : (
               videos.map((videoItem) => {
-                const peerState = mediaStates[videoItem.socketId] ?? { video: true, audio: true };
-                const isVideoOn = peerState.video;
-                const isAudioOn = peerState.audio;
+                const peerState = mediaStates[videoItem.socketId];
+                const isVideoOn = peerState ? peerState.video : true;
+                const isAudioOn = peerState ? peerState.audio : true;
 
                 return (
                   <div key={videoItem.socketId} className={styles.mainVideoTile}>
@@ -1025,7 +861,7 @@ export default function VideoMeetComponent() {
                           if (ref.srcObject !== videoItem.stream) {
                             ref.srcObject = videoItem.stream;
                           }
-                          ref.play().catch(() => {});
+                          ref.play().catch((err) => console.log("Auto-play error:", err));
                         }
                       }}
                       autoPlay
