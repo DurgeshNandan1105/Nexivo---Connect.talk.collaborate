@@ -47,6 +47,8 @@ export default function VideoMeetComponent() {
 
   const [mySpeakingLang, setMySpeakingLang] = useState("en-US");
   const [myListeningLang, setMyListeningLang] = useState("original");
+  const myListeningLangRef = useRef(myListeningLang);
+  myListeningLangRef.current = myListeningLang;
   const [liveCaption, setLiveCaption] = useState(null);
 
   const videoRef = useRef([]);
@@ -93,7 +95,7 @@ export default function VideoMeetComponent() {
         if (localVideoref.current && localVideoref.current.srcObject !== window.localStream) {
           localVideoref.current.srcObject = window.localStream;
         }
-        return;
+        return window.localStream;
       }
 
       let userMediaStream = null;
@@ -140,8 +142,10 @@ export default function VideoMeetComponent() {
           localVideoref.current.srcObject = userMediaStream;
         }
       }
+      return userMediaStream;
     } catch (error) {
       console.error("Error in getPermissions:", error);
+      return null;
     }
   };
 
@@ -227,11 +231,14 @@ export default function VideoMeetComponent() {
   const handleIncomingSpeechChunk = (data) => {
     if (data.socketIdSender === socketIdRef.current) return;
 
-    if (myListeningLang === "original") {
+    // This handler is registered once when the socket connects, so read the
+    // ref to honor language changes made after joining the call.
+    const listeningLang = myListeningLangRef.current;
+    if (listeningLang === "original") {
       setLiveCaption({ sender: data.sender, text: data.text });
       setTimeout(() => setLiveCaption(null), 5000);
     } else {
-      const selectedLangObj = ALL_LANGUAGES.find((l) => l.code === myListeningLang);
+      const selectedLangObj = ALL_LANGUAGES.find((l) => l.code === listeningLang);
       const targetLang = selectedLangObj ? selectedLangObj.iso : "en";
       if (socketRef.current) {
         socketRef.current.emit("request-translation", {
@@ -676,10 +683,17 @@ export default function VideoMeetComponent() {
     setMessage("");
   };
 
-  let connect = () => {
+  let connect = async () => {
+    // Do not create peer connections until the real microphone stream is ready.
+    // Otherwise peers can negotiate the silent placeholder stream created below.
+    const stream = await getPermissions();
+    const hasVideo = !!stream?.getVideoTracks().some((track) => track.readyState === "live");
+    const hasAudio = !!stream?.getAudioTracks().some((track) => track.readyState === "live");
+    setVideoAvailable(hasVideo);
+    setAudioAvailable(hasAudio);
+    setVideo(hasVideo);
+    setAudio(hasAudio);
     setAskForUsername(false);
-    setVideo(videoAvailable);
-    setAudio(audioAvailable);
     connectToSocketServer();
   };
 
