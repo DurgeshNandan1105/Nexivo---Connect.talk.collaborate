@@ -408,90 +408,8 @@ export default function VideoMeetComponent() {
     }
   };
 
-  const startSpeechRecognition = (overrideLang = null) => {
-    if (typeof window === "undefined") return;
-    const SpeechRecognition =
-      window.SpeechRecognition || window.webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      console.warn("SpeechRecognition API is not supported in this browser.");
-      return;
-    }
-
-    stopSpeechRecognition();
-
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.maxAlternatives = 1;
-
-      const currentLang = overrideLang || spokenLanguageRef.current || spokenLanguage || "hi";
-      const langObj = SUPPORTED_LANGUAGES.find(
-        (l) => l.code === currentLang
-      );
-      recognition.lang = langObj ? langObj.speechCode : "hi-IN";
-
-      recognition.onresult = (event) => {
-        let interimTranscript = "";
-        let finalTranscript = "";
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          const chunk = event.results[i][0].transcript;
-          if (event.results[i].isFinal) {
-            finalTranscript += chunk;
-          } else {
-            interimTranscript += chunk;
-          }
-        }
-
-        const captionText = (finalTranscript || interimTranscript).trim();
-        const isFinal = Boolean(finalTranscript);
-
-        if (captionText && socketRef.current) {
-          socketRef.current.emit("live-speech-caption", {
-            text: captionText,
-            sender: username || "Guest",
-            spokenLang: spokenLanguageRef.current,
-            isFinal,
-          });
-        }
-      };
-
-      recognition.onerror = (event) => {
-        if (event.error !== "no-speech" && event.error !== "aborted") {
-          console.warn("Speech recognition error:", event.error);
-        }
-      };
-
-      recognition.onend = () => {
-        // Recognition ended (Chromium silence or utterance pause).
-        // Clear instance reference and instantiate fresh SpeechRecognition to avoid Chromium InvalidStateError!
-        recognitionRef.current = null;
-        if (audioRef.current && !askForUsernameRef.current) {
-          if (recognitionRestartTimeoutRef.current) {
-            clearTimeout(recognitionRestartTimeoutRef.current);
-          }
-          recognitionRestartTimeoutRef.current = setTimeout(() => {
-            if (audioRef.current && !askForUsernameRef.current && !recognitionRef.current) {
-              startSpeechRecognition();
-            }
-          }, 250);
-        }
-      };
-
-      recognition.start();
-      recognitionRef.current = recognition;
-    } catch (err) {
-      console.warn("Could not initialize SpeechRecognition:", err);
-      if (audioRef.current && !askForUsernameRef.current) {
-        recognitionRestartTimeoutRef.current = setTimeout(() => {
-          if (audioRef.current && !askForUsernameRef.current && !recognitionRef.current) {
-            startSpeechRecognition(overrideLang);
-          }
-        }, 500);
-      }
-    }
+  const startSpeechRecognition = () => {
+    // Disabled in favor of Groq Whisper Cloud API to eliminate Chrome's Google mic activation chime ("to-to")
   };
 
   const stopGroqAudioRecorder = () => {
@@ -585,11 +503,9 @@ export default function VideoMeetComponent() {
           now - (lastGroqEmitTimeRef.current || 0) >= 3200;
 
         // Upload to Groq Whisper if:
-        // 1. Speech was detected (at least 1 tick of audio energy > 0.008)
-        // 2. Cooldown is satisfied & at least 3.2s passed since last send
-        // 3. Audio chunk has enough data (> 2000 bytes)
+        // 1. Cooldown is satisfied (safely within 20 RPM limit)
+        // 2. Audio chunk contains speech data (size > 2500 bytes or speechTicks >= 1)
         if (
-          speechTicks >= 1 &&
           canSendGroq &&
           chunks.length > 0 &&
           socketRef.current &&
@@ -600,7 +516,7 @@ export default function VideoMeetComponent() {
           const blob = new Blob(chunks, { type: actualMime });
           chunks = [];
 
-          if (blob.size > 2000) {
+          if (blob.size > 2500 || speechTicks >= 1) {
             try {
               const arrayBuffer = await blob.arrayBuffer();
               if (socketRef.current) {
