@@ -12,17 +12,17 @@ export const INDIAN_LANGUAGES = [
   { code: "kn", speechCode: "kn-IN", name: "Kannada (ಕನ್ನಡ)" },
   { code: "ml", speechCode: "ml-IN", name: "Malayalam (മലയാളം)" },
   { code: "pa", speechCode: "pa-IN", name: "Punjabi (ਪੰਜਾਬੀ)" },
-  { code: "or", speechCode: "or-IN", name: "Odia (ଓଡ଼ିଆ)" },
-  { code: "as", speechCode: "as-IN", name: "Assamese (অসমীয়া)" },
-  { code: "bho", speechCode: "bho-IN", name: "Bhojpuri (भोजपुरी)" },
-  { code: "mai", speechCode: "mai-IN", name: "Maithili (मैथिली)" },
-  { code: "sa", speechCode: "sa-IN", name: "Sanskrit (संस्कृतम्)" },
-  { code: "kok", speechCode: "kok-IN", name: "Konkani (कोंकणी)" },
-  { code: "doi", speechCode: "doi-IN", name: "Dogri (डोगरी)" },
-  { code: "sd", speechCode: "sd-IN", name: "Sindhi (سنڌي)" },
-  { code: "ne", speechCode: "ne-IN", name: "Nepali (नेपाली)" },
-  { code: "mni-Mtei", speechCode: "mni-IN", name: "Manipuri / Meitei (মৈতৈ)" },
-  { code: "lus", speechCode: "lus-IN", name: "Mizo (Lushai)" },
+  { code: "or", speechCode: "hi-IN", name: "Odia (ଓଡ଼ିଆ)" },
+  { code: "as", speechCode: "bn-IN", name: "Assamese (অসমীয়া)" },
+  { code: "bho", speechCode: "hi-IN", name: "Bhojpuri (भोजपुरी)" },
+  { code: "mai", speechCode: "hi-IN", name: "Maithili (मैथिली)" },
+  { code: "sa", speechCode: "hi-IN", name: "Sanskrit (संस्कृतम्)" },
+  { code: "kok", speechCode: "hi-IN", name: "Konkani (कोंकणी)" },
+  { code: "doi", speechCode: "hi-IN", name: "Dogri (डोगरी)" },
+  { code: "sd", speechCode: "hi-IN", name: "Sindhi (سنڌي)" },
+  { code: "ne", speechCode: "hi-IN", name: "Nepali (नेपाली)" },
+  { code: "mni-Mtei", speechCode: "bn-IN", name: "Manipuri / Meitei (মৈতৈ)" },
+  { code: "lus", speechCode: "en-US", name: "Mizo (Lushai)" },
 ];
 
 export const INTERNATIONAL_LANGUAGES = [
@@ -213,13 +213,27 @@ const speechQueue = [];
 let isProcessingQueue = false;
 let currentPlayingAudio = null;
 
+export const TTS_LANGUAGE_MAP = {
+  bho: "hi",
+  mai: "hi",
+  sa: "hi",
+  kok: "hi",
+  doi: "hi",
+  sd: "hi",
+  as: "bn",
+  "mni-Mtei": "bn",
+  lus: "en",
+  or: "hi",
+};
+
 const findBestVoice = (langCode, voiceLang) => {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return null;
   const voices = window.speechSynthesis.getVoices();
   if (!voices || voices.length === 0) return null;
 
-  const targetLangLower = (voiceLang || langCode || "en").toLowerCase();
-  const shortCode = (langCode || "en").toLowerCase().split("-")[0];
+  const mappedCode = TTS_LANGUAGE_MAP[langCode] || langCode;
+  const targetLangLower = (voiceLang || mappedCode || "en").toLowerCase();
+  const shortCode = targetLangLower.split("-")[0];
 
   return (
     voices.find((v) => v.lang.toLowerCase() === targetLangLower) ||
@@ -237,7 +251,8 @@ const findBestVoice = (langCode, voiceLang) => {
 const playWithHtmlAudio = (cleanText, langCode) => {
   return new Promise((resolve, reject) => {
     try {
-      const url = `${server}/api/v1/translate/tts?text=${encodeURIComponent(cleanText)}&lang=${encodeURIComponent(langCode)}`;
+      const ttsLang = TTS_LANGUAGE_MAP[langCode] || langCode;
+      const url = `${server}/api/v1/translate/tts?text=${encodeURIComponent(cleanText)}&lang=${encodeURIComponent(ttsLang)}`;
       const audio = new Audio(url);
       currentPlayingAudio = audio;
 

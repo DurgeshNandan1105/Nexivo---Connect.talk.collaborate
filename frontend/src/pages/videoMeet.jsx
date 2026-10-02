@@ -168,6 +168,9 @@ export default function VideoMeetComponent() {
   // Auto-unmute and resume any blocked audio contexts on user click/interaction
   useEffect(() => {
     const unblockAudio = () => {
+      try {
+        warmupSpeechSynthesis();
+      } catch (e) {}
       document.querySelectorAll("audio, video").forEach((el) => {
         if (el.paused && el.srcObject && !el.muted) {
           el.play().catch(() => {});
@@ -448,12 +451,14 @@ export default function VideoMeetComponent() {
 
       // Voice Activity Detection (VAD) via Web Audio API to prevent sending silence/hallucinations
       let speechTicks = 0;
+      let peakRms = 0;
       let energyInterval = null;
+      let audioCtx = null;
 
       try {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (AudioCtx) {
-          const audioCtx = new AudioCtx();
+          audioCtx = new AudioCtx();
           if (audioCtx.state === "suspended") {
             audioCtx.resume().catch(() => {});
           }
@@ -471,15 +476,16 @@ export default function VideoMeetComponent() {
               sum += v * v;
             }
             const rms = Math.sqrt(sum / dataArray.length);
-            // Speech threshold: rms > 0.020 safely filters room fan hum (< 0.014) while catching human voice (> 0.025)
-            if (rms > 0.020) {
+            if (rms > peakRms) peakRms = rms;
+            // Real human speech is distinctly higher than background room noise (>0.028)
+            if (rms > 0.028) {
               speechTicks++;
             }
           }, 100);
         }
       } catch (vadErr) {
-        // Fallback: if Web Audio fails, allow recording through
-        speechTicks = 4;
+        console.warn("VAD init warning:", vadErr);
+        speechTicks = 0;
       }
 
       const options = mimeType ? { mimeType, audioBitsPerSecond: 64000 } : { audioBitsPerSecond: 64000 };
@@ -495,6 +501,13 @@ export default function VideoMeetComponent() {
       recorder.onstop = async () => {
         if (energyInterval) {
           clearInterval(energyInterval);
+          energyInterval = null;
+        }
+        if (audioCtx) {
+          try {
+            audioCtx.close();
+          } catch (e) {}
+          audioCtx = null;
         }
 
         const now = Date.now();
@@ -504,10 +517,11 @@ export default function VideoMeetComponent() {
 
         // Upload to Groq Whisper ONLY if:
         // 1. Cooldown is satisfied (safely within 20 RPM limit)
-        // 2. Real sustained human voice was detected (speechTicks >= 3 = at least 300ms of voice)
-        // This drops silence, fan hum, and keyboard taps, completely eliminating Whisper silence hallucinations!
+        // 2. Real sustained human voice was detected (speechTicks >= 4 and peakRms >= 0.038)
+        // This drops silence, fan hum, and breathing, completely eliminating Whisper silence hallucinations!
+        const hasRealSpeech = speechTicks >= 4 && peakRms >= 0.038;
         if (
-          speechTicks >= 3 &&
+          hasRealSpeech &&
           canSendGroq &&
           chunks.length > 0 &&
           socketRef.current &&
@@ -628,7 +642,12 @@ export default function VideoMeetComponent() {
       setCaptionsEnabled(true);
       captionsEnabledRef.current = true;
       setOriginalAudioVolume("muted");
-      speakTranslatedAudio("Audio dubbing enabled", captionLanguageRef.current);
+      const lang = captionLanguageRef.current;
+      if (lang === "hi" || lang === "bho") {
+        speakTranslatedAudio("आवाज डबिंग चालू है", lang);
+      } else {
+        speakTranslatedAudio("Audio dubbing enabled", lang);
+      }
     } else {
       clearAudioQueue();
     }

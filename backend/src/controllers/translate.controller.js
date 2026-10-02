@@ -157,6 +157,20 @@ export const getLanguages = (req, res) => {
   });
 };
 
+// Regional dialect mapping to parent TTS voice engines supported by Google
+const TTS_LANGUAGE_MAP = {
+  bho: "hi", // Bhojpuri -> Hindi neural voice
+  mai: "hi", // Maithili -> Hindi neural voice
+  sa: "hi",  // Sanskrit -> Hindi neural voice
+  kok: "hi", // Konkani -> Hindi neural voice
+  doi: "hi", // Dogri -> Hindi neural voice
+  sd: "hi",  // Sindhi -> Hindi neural voice
+  as: "bn",  // Assamese -> Bengali neural voice
+  "mni-Mtei": "bn", // Manipuri -> Bengali neural voice
+  lus: "en", // Mizo -> English voice
+  or: "hi",  // Odia -> Hindi fallback
+};
+
 /**
  * Express REST Controller: GET /api/v1/translate/tts?text=...&lang=...
  * Proxies Google Translate TTS audio as audio/mpeg to bypass browser CORS & Referer checks
@@ -164,21 +178,39 @@ export const getLanguages = (req, res) => {
 export const handleTtsRequest = async (req, res) => {
   try {
     const text = req.query.text || req.query.q;
-    const lang = req.query.lang || req.query.tl || "en";
+    let lang = req.query.lang || req.query.tl || "en";
 
     if (!text || !text.trim()) {
       return res.status(httpStatus.BAD_REQUEST).json({ message: "Text parameter is required" });
     }
 
     const cleanText = text.trim();
-    const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=${encodeURIComponent(lang)}&q=${encodeURIComponent(cleanText)}`;
+    let targetLang = TTS_LANGUAGE_MAP[lang] || lang;
 
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      },
-    });
+    const fetchGoogleTts = async (tl) => {
+      const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=${encodeURIComponent(tl)}&q=${encodeURIComponent(cleanText)}`;
+      return fetch(url, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+      });
+    };
+
+    let response = await fetchGoogleTts(targetLang);
+
+    // If upstream returns non-200 (e.g. 400 for unmapped code), retry with script-based fallback
+    if (!response.ok && targetLang !== "hi" && targetLang !== "en") {
+      const fallbackLang = /[\u0900-\u097F]/.test(cleanText)
+        ? "hi"
+        : /[\u0980-\u09FF]/.test(cleanText)
+        ? "bn"
+        : "en";
+      const fallbackResponse = await fetchGoogleTts(fallbackLang);
+      if (fallbackResponse.ok) {
+        response = fallbackResponse;
+      }
+    }
 
     if (!response.ok) {
       return res.status(response.status).json({ message: "Failed to fetch speech audio from TTS upstream" });

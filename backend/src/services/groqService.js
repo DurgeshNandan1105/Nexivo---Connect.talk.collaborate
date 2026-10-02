@@ -47,7 +47,6 @@ export const processAudioWithGroqWhisper = async ({
     fd.append("model", chosenModel);
     fd.append("response_format", "json");
     fd.append("temperature", "0");
-    fd.append("prompt", "Live multilingual video call speech in Hindi or English");
     if (chosenLang && chosenLang !== "auto") {
       fd.append("language", chosenLang.toLowerCase().split("-")[0]);
     }
@@ -97,7 +96,7 @@ export const processAudioWithGroqWhisper = async ({
         // Both models rate limited; engage circuit breaker
         rateLimitedUntil = Date.now() + 5000;
         if (Date.now() - lastWarningTime > 15000) {
-          console.warn("[Groq Whisper] Rate limit reached (20 RPM limit). Cooling down for 5s (Web Speech API handling speech).");
+          console.warn("[Groq Whisper] Rate limit reached (20 RPM limit). Cooling down for 5s.");
           lastWarningTime = Date.now();
         }
         return { rateLimited: true, retryAfter: 5000 };
@@ -119,15 +118,17 @@ export const processAudioWithGroqWhisper = async ({
   const SILENCE_HALLUCINATIONS = new Set([
     "झाल", "झाला", "झाली", "झाले",
     "अब यह अब", "अब यह", "अब", "यह", "अब ई", "अब ई अब ई",
+    "हाँ", "हो", "तो", "और", "मैं", "आप", "नमस्ते", "धन्यवाद",
     "thank you", "thank you.", "thank you very much.",
     "thanks for watching", "thanks for watching.", "thanks for watching!",
     "subtitles by", "bye", "bye bye", "you", "...", "mbc", "amara.org",
+    "subscribe", "like and subscribe", "please like",
   ]);
 
   const isWhisperHallucination = (rawText) => {
     if (!rawText) return true;
     const clean = rawText.trim().replace(/[.,!?;:\"\'।]/g, "").trim();
-    if (clean.length <= 1) return true;
+    if (clean.length <= 2) return true;
 
     const cleanLower = clean.toLowerCase();
     if (SILENCE_HALLUCINATIONS.has(cleanLower) || SILENCE_HALLUCINATIONS.has(clean)) {
