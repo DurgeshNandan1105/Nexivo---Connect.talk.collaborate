@@ -471,15 +471,15 @@ export default function VideoMeetComponent() {
               sum += v * v;
             }
             const rms = Math.sqrt(sum / dataArray.length);
-            // Sensitive speech threshold: rms > 0.008 reliably catches normal speech and whispers
-            if (rms > 0.008) {
+            // Speech threshold: rms > 0.020 safely filters room fan hum (< 0.014) while catching human voice (> 0.025)
+            if (rms > 0.020) {
               speechTicks++;
             }
           }, 100);
         }
       } catch (vadErr) {
         // Fallback: if Web Audio fails, allow recording through
-        speechTicks = 5;
+        speechTicks = 4;
       }
 
       const options = mimeType ? { mimeType, audioBitsPerSecond: 64000 } : { audioBitsPerSecond: 64000 };
@@ -502,10 +502,12 @@ export default function VideoMeetComponent() {
           now >= (groqCooldownUntilRef.current || 0) &&
           now - (lastGroqEmitTimeRef.current || 0) >= 3200;
 
-        // Upload to Groq Whisper if:
+        // Upload to Groq Whisper ONLY if:
         // 1. Cooldown is satisfied (safely within 20 RPM limit)
-        // 2. Audio chunk contains speech data (size > 2500 bytes or speechTicks >= 1)
+        // 2. Real sustained human voice was detected (speechTicks >= 3 = at least 300ms of voice)
+        // This drops silence, fan hum, and keyboard taps, completely eliminating Whisper silence hallucinations!
         if (
+          speechTicks >= 3 &&
           canSendGroq &&
           chunks.length > 0 &&
           socketRef.current &&
@@ -516,7 +518,7 @@ export default function VideoMeetComponent() {
           const blob = new Blob(chunks, { type: actualMime });
           chunks = [];
 
-          if (blob.size > 2500 || speechTicks >= 1) {
+          if (blob.size > 2500) {
             try {
               const arrayBuffer = await blob.arrayBuffer();
               if (socketRef.current) {

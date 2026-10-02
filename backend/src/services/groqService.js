@@ -118,13 +118,39 @@ export const processAudioWithGroqWhisper = async ({
   // Known Whisper silence hallucinations on background noise/breathing
   const SILENCE_HALLUCINATIONS = new Set([
     "झाल", "झाला", "झाली", "झाले",
+    "अब यह अब", "अब यह", "अब", "यह", "अब ई", "अब ई अब ई",
     "thank you", "thank you.", "thank you very much.",
     "thanks for watching", "thanks for watching.", "thanks for watching!",
-    "subtitles by", "bye", "you", "...", "mbc", "amara.org",
+    "subtitles by", "bye", "bye bye", "you", "...", "mbc", "amara.org",
   ]);
 
-  const cleanLower = text.toLowerCase().replace(/[.,!?;:]/g, "").trim();
-  if (!text || text.length <= 1 || SILENCE_HALLUCINATIONS.has(cleanLower) || SILENCE_HALLUCINATIONS.has(text)) {
+  const isWhisperHallucination = (rawText) => {
+    if (!rawText) return true;
+    const clean = rawText.trim().replace(/[.,!?;:\"\'।]/g, "").trim();
+    if (clean.length <= 1) return true;
+
+    const cleanLower = clean.toLowerCase();
+    if (SILENCE_HALLUCINATIONS.has(cleanLower) || SILENCE_HALLUCINATIONS.has(clean)) {
+      return true;
+    }
+
+    const words = clean.split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      const counts = {};
+      words.forEach((w) => {
+        counts[w] = (counts[w] || 0) + 1;
+      });
+      const maxCount = Math.max(...Object.values(counts));
+      // Detect repetition loops common in Whisper on silence (e.g. "अब यह अब", "bye bye", "you you")
+      if (words.length === 2 && words[0] === words[1]) return true;
+      if (words.length === 3 && (words[0] === words[2] || words[0] === words[1] || words[1] === words[2])) return true;
+      if (words.length === 4 && maxCount >= 2 && words[0] === words[2] && words[1] === words[3]) return true;
+      if (words.length <= 6 && maxCount / words.length >= 0.5) return true;
+    }
+    return false;
+  };
+
+  if (isWhisperHallucination(text)) {
     return null;
   }
 
