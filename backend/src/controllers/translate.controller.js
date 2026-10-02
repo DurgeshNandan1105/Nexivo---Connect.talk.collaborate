@@ -156,3 +156,40 @@ export const getLanguages = (req, res) => {
     languages: SUPPORTED_LANGUAGES,
   });
 };
+
+/**
+ * Express REST Controller: GET /api/v1/translate/tts?text=...&lang=...
+ * Proxies Google Translate TTS audio as audio/mpeg to bypass browser CORS & Referer checks
+ */
+export const handleTtsRequest = async (req, res) => {
+  try {
+    const text = req.query.text || req.query.q;
+    const lang = req.query.lang || req.query.tl || "en";
+
+    if (!text || !text.trim()) {
+      return res.status(httpStatus.BAD_REQUEST).json({ message: "Text parameter is required" });
+    }
+
+    const cleanText = text.trim();
+    const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=${encodeURIComponent(lang)}&q=${encodeURIComponent(cleanText)}`;
+
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).json({ message: "Failed to fetch speech audio from TTS upstream" });
+    }
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    const arrayBuffer = await response.arrayBuffer();
+    return res.send(Buffer.from(arrayBuffer));
+  } catch (err) {
+    console.error("TTS Proxy error:", err);
+    return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ message: err.message });
+  }
+};

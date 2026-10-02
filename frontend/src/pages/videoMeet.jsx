@@ -15,8 +15,20 @@ import CloseIcon from "@mui/icons-material/Close";
 import ClosedCaptionIcon from "@mui/icons-material/ClosedCaption";
 import ClosedCaptionDisabledIcon from "@mui/icons-material/ClosedCaptionDisabled";
 import TranslateIcon from "@mui/icons-material/Translate";
+import VolumeUpIcon from "@mui/icons-material/VolumeUp";
+import VolumeOffIcon from "@mui/icons-material/VolumeOff";
 import server from "../environment";
-import { SUPPORTED_LANGUAGES, INDIAN_LANGUAGES, INTERNATIONAL_LANGUAGES, translateText, speakTranslatedAudio, queueTranslatedAudio, clearAudioQueue } from "../utils/translationService";
+import {
+  SUPPORTED_LANGUAGES,
+  INDIAN_LANGUAGES,
+  INTERNATIONAL_LANGUAGES,
+  translateText,
+  speakTranslatedAudio,
+  queueTranslatedAudio,
+  clearAudioQueue,
+  registerSpeechActivityCallback,
+  warmupSpeechSynthesis,
+} from "../utils/translationService";
 import { streamingPlayer } from "../utils/streamingAudioPlayer";
 
 const server_url = server;
@@ -57,20 +69,33 @@ export default function VideoMeetComponent() {
   const [videos, setVideos] = useState([]);
 
   // Live Subtitles, Translation & Audio Dubbing States
-  const [captionsEnabled, setCaptionsEnabled] = useState(false);
-  const [spokenLanguage, setSpokenLanguage] = useState("en");
+  const [captionsEnabled, setCaptionsEnabled] = useState(true);
+  const [spokenLanguage, setSpokenLanguage] = useState(() => {
+    try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+      const navLang = (navigator.language || "").toLowerCase();
+      if (tz.includes("Calcutta") || tz.includes("Kolkata") || navLang.startsWith("hi")) {
+        return "hi";
+      }
+    } catch (e) {}
+    return "hi"; // Default to Hindi for seamless Indian / regional communication
+  });
   const [captionLanguage, setCaptionLanguage] = useState("en");
-  const [audioDubbing, setAudioDubbing] = useState(false);
-  const [originalAudioVolume, setOriginalAudioVolume] = useState("ducked"); // "ducked" (20%), "muted" (0%), "normal" (100%)
+  const [audioDubbing, setAudioDubbing] = useState(true);
+  const [originalAudioVolume, setOriginalAudioVolume] = useState("muted"); // "muted" (0% English only), "ducked" (15%), "normal" (100%)
+  const [isDubbingSpeaking, setIsDubbingSpeaking] = useState(false);
   const [showCaptionSettings, setShowCaptionSettings] = useState(false);
   const [activeCaption, setActiveCaption] = useState(null);
   const [autoTranslateChat, setAutoTranslateChat] = useState(false);
   const [chatTranslations, setChatTranslations] = useState({});
+  const [peerLanguages, setPeerLanguages] = useState({});
+  const [languageToast, setLanguageToast] = useState(null);
 
   const getPeerAudioVolume = () => {
     if (!audioDubbing) return 1.0;
+    if (isDubbingSpeaking) return 0.0;
     if (originalAudioVolume === "muted") return 0.0;
-    if (originalAudioVolume === "ducked") return 0.2;
+    if (originalAudioVolume === "ducked") return 0.15;
     return 1.0;
   };
 
@@ -79,22 +104,51 @@ export default function VideoMeetComponent() {
     const vol = getPeerAudioVolume();
     document.querySelectorAll("audio[data-remote='true']").forEach((audioEl) => {
       audioEl.volume = vol;
+      audioEl.muted = (vol === 0);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioDubbing, originalAudioVolume]);
+  }, [audioDubbing, originalAudioVolume, isDubbingSpeaking]);
+
+  // Hook into real-time TTS speech activity for instant zero-lag audio ducking
+  useEffect(() => {
+    const unregister = registerSpeechActivityCallback((speaking) => {
+      setIsDubbingSpeaking(speaking);
+      const vol = !audioDubbingRef.current
+        ? 1.0
+        : speaking
+        ? 0.0
+        : originalAudioVolume === "muted"
+        ? 0.0
+        : 0.15;
+      document.querySelectorAll("audio[data-remote='true']").forEach((audioEl) => {
+        audioEl.volume = vol;
+        audioEl.muted = (vol === 0);
+      });
+    });
+    return () => unregister();
+  }, [originalAudioVolume]);
 
   // Refs for async callbacks
   const recognitionRef = useRef(null);
-  const captionsEnabledRef = useRef(false);
+  const recognitionRestartTimeoutRef = useRef(null);
+  const captionsEnabledRef = useRef(true);
   const audioRef = useRef(true);
-  const spokenLanguageRef = useRef("en");
+  const spokenLanguageRef = useRef("hi");
   const captionLanguageRef = useRef("en");
-  const audioDubbingRef = useRef(false);
+  const audioDubbingRef = useRef(true);
   const autoTranslateChatRef = useRef(false);
+  const askForUsernameRef = useRef(true);
   const captionTimeoutRef = useRef(null);
   const peerStreamsRef = useRef({});
   const dubbingTimeoutRef = useRef({});
   const peerWordsPointerRef = useRef({});
+  const lastQueuedAudioRef = useRef({});
+  const peerLanguagesRef = useRef({});
+  const groqRecorderRef = useRef(null);
+  const groqSliceTimeoutRef = useRef(null);
+  const isGroqRecordingRef = useRef(false);
+  const lastGroqEmitTimeRef = useRef(0);
+  const groqCooldownUntilRef = useRef(0);
 
   // Auto-unmute and resume any blocked audio contexts on user click/interaction
   useEffect(() => {
@@ -128,7 +182,10 @@ export default function VideoMeetComponent() {
     captionLanguageRef.current = captionLanguage;
     audioDubbingRef.current = audioDubbing;
     autoTranslateChatRef.current = autoTranslateChat;
-  }, [captionsEnabled, audio, spokenLanguage, captionLanguage, audioDubbing, autoTranslateChat]);
+    askForUsernameRef.current = askForUsername;
+    peerLanguagesRef.current = peerLanguages;
+  }, [captionsEnabled, audio, spokenLanguage, captionLanguage, audioDubbing, autoTranslateChat, askForUsername, peerLanguages]);
+
 
   // Normalize room path across any host, port or trailing slashes
   const getRoomPath = () => {
@@ -194,10 +251,16 @@ export default function VideoMeetComponent() {
       }
 
       let userMediaStream = null;
+      const audioConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      };
+
       try {
         userMediaStream = await navigator.mediaDevices.getUserMedia({
           video: true,
-          audio: true,
+          audio: audioConstraints,
         });
       } catch (err) {
         console.warn("Could not get both video and audio, trying individual tracks:", err);
@@ -208,7 +271,7 @@ export default function VideoMeetComponent() {
 
         let audStream = null;
         try {
-          audStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          audStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
         } catch (e) {}
 
         if (vidStream && audStream) {
@@ -315,16 +378,22 @@ export default function VideoMeetComponent() {
   };
 
   const stopSpeechRecognition = () => {
+    if (recognitionRestartTimeoutRef.current) {
+      clearTimeout(recognitionRestartTimeoutRef.current);
+      recognitionRestartTimeoutRef.current = null;
+    }
     if (recognitionRef.current) {
       try {
         recognitionRef.current.onend = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onresult = null;
         recognitionRef.current.abort();
       } catch (e) {}
       recognitionRef.current = null;
     }
   };
 
-  const startSpeechRecognition = () => {
+  const startSpeechRecognition = (overrideLang = null) => {
     if (typeof window === "undefined") return;
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -340,11 +409,13 @@ export default function VideoMeetComponent() {
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
       recognition.interimResults = true;
+      recognition.maxAlternatives = 1;
 
+      const currentLang = overrideLang || spokenLanguageRef.current || spokenLanguage || "hi";
       const langObj = SUPPORTED_LANGUAGES.find(
-        (l) => l.code === spokenLanguageRef.current
+        (l) => l.code === currentLang
       );
-      recognition.lang = langObj ? langObj.speechCode : "en-US";
+      recognition.lang = langObj ? langObj.speechCode : "hi-IN";
 
       recognition.onresult = (event) => {
         let interimTranscript = "";
@@ -379,15 +450,18 @@ export default function VideoMeetComponent() {
       };
 
       recognition.onend = () => {
-        // Auto-restart if captions or dubbing and mic are still enabled
-        if ((captionsEnabledRef.current || audioDubbingRef.current) && audioRef.current) {
-          setTimeout(() => {
-            try {
-              if ((captionsEnabledRef.current || audioDubbingRef.current) && audioRef.current && recognitionRef.current) {
-                recognitionRef.current.start();
-              }
-            } catch (e) {}
-          }, 200);
+        // Recognition ended (Chromium silence or utterance pause).
+        // Clear instance reference and instantiate fresh SpeechRecognition to avoid Chromium InvalidStateError!
+        recognitionRef.current = null;
+        if (audioRef.current && !askForUsernameRef.current) {
+          if (recognitionRestartTimeoutRef.current) {
+            clearTimeout(recognitionRestartTimeoutRef.current);
+          }
+          recognitionRestartTimeoutRef.current = setTimeout(() => {
+            if (audioRef.current && !askForUsernameRef.current && !recognitionRef.current) {
+              startSpeechRecognition();
+            }
+          }, 250);
         }
       };
 
@@ -395,44 +469,305 @@ export default function VideoMeetComponent() {
       recognitionRef.current = recognition;
     } catch (err) {
       console.warn("Could not initialize SpeechRecognition:", err);
+      if (audioRef.current && !askForUsernameRef.current) {
+        recognitionRestartTimeoutRef.current = setTimeout(() => {
+          if (audioRef.current && !askForUsernameRef.current && !recognitionRef.current) {
+            startSpeechRecognition(overrideLang);
+          }
+        }, 500);
+      }
     }
   };
 
-  // Manage speech recognition lifecycle
+  const stopGroqAudioRecorder = () => {
+    isGroqRecordingRef.current = false;
+    if (groqSliceTimeoutRef.current) {
+      clearTimeout(groqSliceTimeoutRef.current);
+      groqSliceTimeoutRef.current = null;
+    }
+    if (groqRecorderRef.current) {
+      try {
+        if (groqRecorderRef.current.state === "recording") {
+          groqRecorderRef.current.stop();
+        }
+      } catch (e) {}
+      groqRecorderRef.current = null;
+    }
+  };
+
+  const startGroqAudioRecorder = () => {
+    if (typeof window === "undefined" || typeof MediaRecorder === "undefined") return;
+    if (!window.localStream) return;
+    const audioTracks = window.localStream.getAudioTracks();
+    if (!audioTracks || audioTracks.length === 0 || !audioTracks[0].enabled) return;
+
+    stopGroqAudioRecorder();
+    isGroqRecordingRef.current = true;
+
+    try {
+      const audioStream = new MediaStream([audioTracks[0]]);
+      let mimeType = "audio/webm;codecs=opus";
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = MediaRecorder.isTypeSupported("audio/webm")
+          ? "audio/webm"
+          : "";
+      }
+
+      // Voice Activity Detection (VAD) via Web Audio API to prevent sending silence/hallucinations
+      let speechTicks = 0;
+      let energyInterval = null;
+
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          const audioCtx = new AudioCtx();
+          if (audioCtx.state === "suspended") {
+            audioCtx.resume().catch(() => {});
+          }
+          const source = audioCtx.createMediaStreamSource(audioStream);
+          const analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 512;
+          source.connect(analyser);
+
+          const dataArray = new Uint8Array(analyser.fftSize);
+          energyInterval = setInterval(() => {
+            analyser.getByteTimeDomainData(dataArray);
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+              const v = (dataArray[i] - 128) / 128;
+              sum += v * v;
+            }
+            const rms = Math.sqrt(sum / dataArray.length);
+            // Speech threshold: rms > 0.028 indicates human voice
+            if (rms > 0.028) {
+              speechTicks++;
+            }
+          }, 100);
+        }
+      } catch (vadErr) {
+        // Fallback: if Web Audio fails, allow recording through
+        speechTicks = 6;
+      }
+
+      const options = mimeType ? { mimeType, audioBitsPerSecond: 64000 } : { audioBitsPerSecond: 64000 };
+      const recorder = new MediaRecorder(audioStream, options);
+      let chunks = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          chunks.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        if (energyInterval) {
+          clearInterval(energyInterval);
+        }
+
+        const now = Date.now();
+        const canSendGroq =
+          now >= (groqCooldownUntilRef.current || 0) &&
+          now - (lastGroqEmitTimeRef.current || 0) >= 3600;
+
+        // Only upload to Groq Whisper if:
+        // 1. Sustained speech was detected (at least 400ms = 4 ticks of energy)
+        // 2. Cooldown is satisfied & at least 3.6s passed since last send (protecting 20 RPM limit)
+        // 3. Audio chunk has enough data
+        if (
+          speechTicks >= 4 &&
+          canSendGroq &&
+          chunks.length > 0 &&
+          socketRef.current &&
+          audioRef.current &&
+          !askForUsernameRef.current
+        ) {
+          const actualMime = recorder.mimeType || mimeType || "audio/webm";
+          const blob = new Blob(chunks, { type: actualMime });
+          chunks = [];
+
+          if (blob.size > 3000) {
+            try {
+              const arrayBuffer = await blob.arrayBuffer();
+              if (socketRef.current) {
+                lastGroqEmitTimeRef.current = Date.now();
+                socketRef.current.emit("groq-audio-chunk", {
+                  audioBuffer: arrayBuffer,
+                  mimeType: actualMime,
+                  spokenLang: spokenLanguageRef.current,
+                  targetLang: captionLanguageRef.current,
+                  sender: username || "Guest",
+                });
+              }
+            } catch (err) {
+              console.warn("Error sending groq-audio-chunk:", err);
+            }
+          }
+        } else {
+          chunks = [];
+        }
+
+        // Loop continuous slicing while call is active and mic unmuted
+        if (isGroqRecordingRef.current && audioRef.current && !askForUsernameRef.current) {
+          setTimeout(startGroqAudioRecorder, 100);
+        }
+      };
+
+      recorder.start();
+      groqRecorderRef.current = recorder;
+
+      // Slice audio in 3.8-second intervals (max ~15 req/min, safely below Groq's 20 RPM limit)
+      groqSliceTimeoutRef.current = setTimeout(() => {
+        if (recorder.state === "recording") {
+          recorder.stop();
+        }
+      }, 3800);
+    } catch (err) {
+      console.warn("Could not start Groq MediaRecorder:", err);
+    }
+  };
+
+
+  // Manage speech recognition & Groq Whisper audio recording: runs continuously whenever mic is unmuted in call!
   useEffect(() => {
-    if ((captionsEnabled || audioDubbing) && audio && !askForUsername) {
+    if (!askForUsername && audio) {
       startSpeechRecognition();
+      startGroqAudioRecorder();
     } else {
       stopSpeechRecognition();
+      stopGroqAudioRecorder();
     }
 
     return () => {
       stopSpeechRecognition();
+      stopGroqAudioRecorder();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [captionsEnabled, audioDubbing, audio, spokenLanguage, askForUsername]);
+  }, [audio, spokenLanguage, askForUsername]);
+
+
+  const handleSpokenLanguageChange = (newLang) => {
+    setSpokenLanguage(newLang);
+    spokenLanguageRef.current = newLang;
+    if (audioRef.current && !askForUsername) {
+      startSpeechRecognition(newLang);
+    }
+    if (socketRef.current) {
+      socketRef.current.emit("peer-language-update", {
+        spokenLang: newLang,
+        captionLang: captionLanguageRef.current,
+        audioDubbing: audioDubbingRef.current,
+      });
+    }
+  };
+
+  const handleCaptionLanguageChange = (newLang) => {
+    setCaptionLanguage(newLang);
+    captionLanguageRef.current = newLang;
+    // Auto-enable audio dubbing and captions when user selects a target language
+    setAudioDubbing(true);
+    audioDubbingRef.current = true;
+    setCaptionsEnabled(true);
+    captionsEnabledRef.current = true;
+    setOriginalAudioVolume("muted");
+
+    const langName = SUPPORTED_LANGUAGES.find((l) => l.code === newLang)?.name || newLang;
+    setLanguageToast(`Translating and dubbing to ${langName}`);
+    setTimeout(() => setLanguageToast(null), 3500);
+
+    if (socketRef.current) {
+      socketRef.current.emit("peer-language-update", {
+        spokenLang: spokenLanguageRef.current,
+        captionLang: newLang,
+        audioDubbing: true,
+      });
+      socketRef.current.emit("peer-dubbing-state", {
+        audioDubbing: true,
+        targetLang: newLang,
+      });
+    }
+  };
+
+  const handleToggleAudioDubbing = () => {
+    const nextDubbing = !audioDubbing;
+    setAudioDubbing(nextDubbing);
+    audioDubbingRef.current = nextDubbing;
+    if (nextDubbing) {
+      setCaptionsEnabled(true);
+      captionsEnabledRef.current = true;
+      setOriginalAudioVolume("muted");
+      speakTranslatedAudio("Audio dubbing enabled", captionLanguageRef.current);
+    } else {
+      clearAudioQueue();
+    }
+    if (socketRef.current) {
+      socketRef.current.emit("peer-dubbing-state", {
+        audioDubbing: nextDubbing,
+        targetLang: captionLanguageRef.current,
+      });
+    }
+  };
+
+  const handleRequestFriendLanguage = (targetSocketId, newLang) => {
+    if (socketRef.current) {
+      socketRef.current.emit("peer-language-request", {
+        targetSocketId,
+        spokenLang: newLang,
+      });
+    }
+    setPeerLanguages((prev) => ({
+      ...prev,
+      [targetSocketId]: {
+        ...(prev[targetSocketId] || {}),
+        spokenLang: newLang,
+      },
+    }));
+  };
 
   const handleIncomingSpeechCaption = async (captionData) => {
-    if (!captionsEnabledRef.current && !audioDubbingRef.current) return;
-    const { text, sender, spokenLang, isFinal, socketIdSender } = captionData;
+    const { text, originalText, sender, spokenLang, isFinal, socketIdSender, fromGroqWhisper } = captionData;
     if (!text || !text.trim()) return;
 
-    const myTargetLang = captionLanguageRef.current;
+    const myTargetLang = captionLanguageRef.current || "en";
+    const actualSourceLang =
+      spokenLang ||
+      peerLanguagesRef.current[socketIdSender]?.spokenLang ||
+      peerLanguages[socketIdSender]?.spokenLang ||
+      "hi";
     let displayText = text;
-    let fromLang = spokenLang || "auto";
+    let fromLang = actualSourceLang;
 
-    // If source language differs from my target caption language, translate!
-    if (spokenLang !== myTargetLang) {
+    // 1. Subtitle & Audio Translation
+    if (fromGroqWhisper) {
+      const groqOutputLang = captionData.targetLang || "en";
+      // If Groq translated to English, but receiver wants another chosen language (e.g. Spanish, French, etc.)
+      if (myTargetLang !== groqOutputLang) {
+        try {
+          const res = await translateText(
+            text,
+            myTargetLang,
+            groqOutputLang,
+            socketRef.current
+          );
+          if (res && res.translatedText) {
+            displayText = res.translatedText;
+            fromLang = actualSourceLang;
+          }
+        } catch (err) {
+          displayText = text;
+        }
+      }
+    } else if (actualSourceLang !== myTargetLang) {
+      // Web Speech API fallback: translate from spokenLang to myTargetLang
       try {
         const res = await translateText(
           text,
           myTargetLang,
-          spokenLang,
+          actualSourceLang,
           socketRef.current
         );
         if (res && res.translatedText) {
           displayText = res.translatedText;
-          fromLang = res.from || spokenLang;
+          fromLang = res.from || actualSourceLang;
         }
       } catch (err) {
         displayText = text;
@@ -444,53 +779,100 @@ export default function VideoMeetComponent() {
     if (captionsEnabledRef.current) {
       setActiveCaption({
         text: displayText,
-        originalText: text,
+        originalText: originalText || text,
         sender: isMe ? "You" : sender,
         fromLang,
         toLang: myTargetLang,
         isFinal,
         isMe,
+        fromGroq: fromGroqWhisper,
         id: Date.now() + Math.random(),
       });
     }
 
-    // CONTINUOUS LIVE AUDIO DUBBING: Speaks streaming clauses in real-time as words are spoken!
+    // 2. High-Fidelity Audio Dubbing (TTS)
     if (!isMe && audioDubbingRef.current) {
-      const words = text.trim().split(/\s+/);
-      const pointer = peerWordsPointerRef.current[socketIdSender] || 0;
-      const newWordsCount = words.length - pointer;
+      if (fromGroqWhisper) {
+        // Groq Whisper delivered completed neural translation chunk!
+        const cleanToSpeak = displayText.trim();
+        const lastQueued = lastQueuedAudioRef.current[socketIdSender] || "";
+        if (lastQueued !== cleanToSpeak) {
+          lastQueuedAudioRef.current[socketIdSender] = cleanToSpeak;
+          queueTranslatedAudio(cleanToSpeak, myTargetLang);
+        }
+      } else {
+        const cleanText = text.trim();
+        const words = cleanText.split(/\s+/);
+        const pointer = peerWordsPointerRef.current[socketIdSender] || 0;
+        const newWordsCount = words.length - pointer;
 
-      // Slice out completed clauses (every 3-4 words, on punctuation mark, or when finalized)
-      const hasPunctuation = /[।!?,.]/.test(text.slice(-2));
-      const shouldSpeakClause =
-        newWordsCount >= 4 ||
-        (hasPunctuation && newWordsCount >= 2) ||
-        (isFinal && newWordsCount > 0);
+        // Helper to translate & speak a chunk
+        const speakChunk = (chunkToSpeak) => {
+          const trimmed = chunkToSpeak.trim();
+          if (!trimmed) return;
 
-      if (shouldSpeakClause) {
-        const clauseToTranslate = words.slice(pointer, pointer + newWordsCount).join(" ");
-        peerWordsPointerRef.current[socketIdSender] = words.length;
+          // Skip exact duplicate if already queued recently
+          const lastQueued = lastQueuedAudioRef.current[socketIdSender] || "";
+          if (lastQueued === trimmed) return;
+          lastQueuedAudioRef.current[socketIdSender] = trimmed;
 
-        if (spokenLang !== myTargetLang) {
-          translateText(clauseToTranslate, myTargetLang, spokenLang, socketRef.current)
-            .then((res) => {
-              if (res && res.translatedText) {
-                queueTranslatedAudio(res.translatedText, myTargetLang);
-              }
-            })
-            .catch(() => {
-              queueTranslatedAudio(clauseToTranslate, myTargetLang);
-            });
+          if (actualSourceLang !== myTargetLang) {
+            translateText(trimmed, myTargetLang, actualSourceLang, socketRef.current)
+              .then((res) => {
+                if (res && res.translatedText) {
+                  queueTranslatedAudio(res.translatedText, myTargetLang);
+                }
+              })
+              .catch(() => {
+                queueTranslatedAudio(trimmed, myTargetLang);
+              });
+          } else {
+            queueTranslatedAudio(trimmed, myTargetLang);
+          }
+        };
+
+        // Clear any pending pause debounce timer
+        if (dubbingTimeoutRef.current[socketIdSender]) {
+          clearTimeout(dubbingTimeoutRef.current[socketIdSender]);
+          dubbingTimeoutRef.current[socketIdSender] = null;
+        }
+
+        if (isFinal) {
+          // Sentence finalized: speak entire sentence or remaining tail
+          if (pointer === 0) {
+            if (displayText && displayText !== text) {
+              queueTranslatedAudio(displayText, myTargetLang);
+              lastQueuedAudioRef.current[socketIdSender] = cleanText;
+            } else {
+              speakChunk(cleanText);
+            }
+          } else if (newWordsCount > 0) {
+            speakChunk(words.slice(pointer).join(" "));
+          }
+          peerWordsPointerRef.current[socketIdSender] = 0;
         } else {
-          queueTranslatedAudio(clauseToTranslate, myTargetLang);
+          // While interim speaking: check for punctuation or completed clause (> 5 words)
+          const hasPunctuation = /[।!?,.]/.test(cleanText.slice(-2));
+          if ((hasPunctuation && newWordsCount >= 3) || newWordsCount >= 6) {
+            const chunk = words.slice(pointer, pointer + newWordsCount).join(" ");
+            peerWordsPointerRef.current[socketIdSender] = words.length;
+            speakChunk(chunk);
+          } else if (newWordsCount > 0) {
+            // Pause debounce: if speaker pauses for 650ms mid-sentence, speak what we have
+            dubbingTimeoutRef.current[socketIdSender] = setTimeout(() => {
+              const curPointer = peerWordsPointerRef.current[socketIdSender] || 0;
+              const remaining = words.slice(curPointer).join(" ");
+              if (remaining.trim()) {
+                peerWordsPointerRef.current[socketIdSender] = words.length;
+                speakChunk(remaining);
+              }
+            }, 650);
+          }
         }
       }
-
-      // Reset pointer when sentence is finalized
-      if (isFinal) {
-        peerWordsPointerRef.current[socketIdSender] = 0;
-      }
     }
+
+
 
     // Auto-clear active caption after 4.5 seconds of silence
     if (captionTimeoutRef.current) {
@@ -797,14 +1179,53 @@ export default function VideoMeetComponent() {
       socketRef.current.emit("join-call", roomPath);
       socketIdRef.current = socketRef.current.id;
 
+      socketRef.current.emit("peer-language-update", {
+        spokenLang: spokenLanguageRef.current,
+        captionLang: captionLanguageRef.current,
+        audioDubbing: audioDubbingRef.current,
+      });
+
       socketRef.current.on("chat-message", addMessage);
       socketRef.current.on("reaction", handleIncomingReaction);
       socketRef.current.on("live-speech-caption", handleIncomingSpeechCaption);
+
+      socketRef.current.on("peer-language-update", (data) => {
+        if (data && data.socketIdSender) {
+          setPeerLanguages((prev) => ({
+            ...prev,
+            [data.socketIdSender]: data,
+          }));
+        }
+      });
+
+      socketRef.current.on("peer-language-request", (data) => {
+        if (data?.spokenLang && data.spokenLang !== spokenLanguageRef.current) {
+          handleSpokenLanguageChange(data.spokenLang);
+          const langName =
+            SUPPORTED_LANGUAGES.find((l) => l.code === data.spokenLang)?.name ||
+            data.spokenLang;
+          setLanguageToast(`Language set to ${langName} by your friend`);
+          setTimeout(() => setLanguageToast(null), 4500);
+        }
+      });
+
+      socketRef.current.on("peer-dubbing-state", (data) => {
+        if (data?.audioDubbing) {
+          if (audioRef.current && !askForUsernameRef.current && !recognitionRef.current) {
+            startSpeechRecognition();
+          }
+        }
+      });
 
       socketRef.current.on("stream-audio-translated", (data) => {
         if (audioDubbingRef.current && data?.audioData) {
           streamingPlayer.playPcmChunk(data.audioData);
         }
+      });
+
+      socketRef.current.on("groq-rate-limited", (data) => {
+        const waitMs = (data && data.retryAfter) || 5000;
+        groqCooldownUntilRef.current = Date.now() + waitMs;
       });
 
       socketRef.current.on("user-media-state", (data) => {
@@ -834,6 +1255,11 @@ export default function VideoMeetComponent() {
           delete next[id];
           return next;
         });
+        setPeerLanguages((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
       });
 
       socketRef.current.on("user-joined", (id, clients) => {
@@ -843,6 +1269,15 @@ export default function VideoMeetComponent() {
 
           createPeerConnection(socketListId);
         });
+
+        // Broadcast current language settings to new peers
+        if (socketRef.current) {
+          socketRef.current.emit("peer-language-update", {
+            spokenLang: spokenLanguageRef.current,
+            captionLang: captionLanguageRef.current,
+            audioDubbing: audioDubbingRef.current,
+          });
+        }
 
         // Broadcast current media state based on actual live tracks
         const curVid = window.localStream
@@ -965,6 +1400,7 @@ export default function VideoMeetComponent() {
   };
 
   const connect = async () => {
+    warmupSpeechSynthesis();
     let stream = window.localStream;
     if (!stream || !stream.active) {
       stream = await getPermissions();
@@ -974,6 +1410,14 @@ export default function VideoMeetComponent() {
     setVideo(hasVideo);
     setAudio(hasAudio);
     setAskForUsername(false);
+
+    // Auto-enable live voice dubbing and subtitles upon entering call
+    setAudioDubbing(true);
+    audioDubbingRef.current = true;
+    setCaptionsEnabled(true);
+    captionsEnabledRef.current = true;
+    setOriginalAudioVolume("muted");
+
     connectToSocketServer();
   };
 
@@ -1083,7 +1527,7 @@ export default function VideoMeetComponent() {
                     </label>
                     <select
                       value={spokenLanguage}
-                      onChange={(e) => setSpokenLanguage(e.target.value)}
+                      onChange={(e) => handleSpokenLanguageChange(e.target.value)}
                       className={styles.captionSelect}
                       style={{
                         width: "100%",
@@ -1123,7 +1567,18 @@ export default function VideoMeetComponent() {
                     </label>
                     <select
                       value={captionLanguage}
-                      onChange={(e) => setCaptionLanguage(e.target.value)}
+                      onChange={(e) => {
+                        const newLang = e.target.value;
+                        setCaptionLanguage(newLang);
+                        captionLanguageRef.current = newLang;
+                        if (newLang !== spokenLanguage) {
+                          setAudioDubbing(true);
+                          audioDubbingRef.current = true;
+                          setCaptionsEnabled(true);
+                          captionsEnabledRef.current = true;
+                          setOriginalAudioVolume("muted");
+                        }
+                      }}
                       className={styles.captionSelect}
                       style={{
                         width: "100%",
@@ -1173,7 +1628,10 @@ export default function VideoMeetComponent() {
                     <input
                       type="checkbox"
                       checked={captionsEnabled}
-                      onChange={(e) => setCaptionsEnabled(e.target.checked)}
+                      onChange={(e) => {
+                        setCaptionsEnabled(e.target.checked);
+                        captionsEnabledRef.current = e.target.checked;
+                      }}
                       style={{ width: 15, height: 15, accentColor: "#6366f1" }}
                     />
                     <span>Live Subtitles</span>
@@ -1193,14 +1651,46 @@ export default function VideoMeetComponent() {
                       type="checkbox"
                       checked={audioDubbing}
                       onChange={(e) => {
-                        setAudioDubbing(e.target.checked);
-                        if (e.target.checked) setCaptionsEnabled(true);
+                        const isChecked = e.target.checked;
+                        setAudioDubbing(isChecked);
+                        audioDubbingRef.current = isChecked;
+                        if (isChecked) {
+                          setCaptionsEnabled(true);
+                          captionsEnabledRef.current = true;
+                          setOriginalAudioVolume("muted");
+                        }
                       }}
                       style={{ width: 15, height: 15, accentColor: "#6366f1" }}
                     />
                     <span>🔊 Live Voice Dubbing</span>
                   </label>
                 </div>
+
+                {audioDubbing && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      paddingTop: "6px",
+                      borderTop: "1px dashed rgba(255, 255, 255, 0.1)",
+                    }}
+                  >
+                    <span style={{ fontSize: "0.74rem", color: "#94a3b8" }}>
+                      Original Peer Voice:
+                    </span>
+                    <select
+                      value={originalAudioVolume}
+                      onChange={(e) => setOriginalAudioVolume(e.target.value)}
+                      className={styles.captionSelect}
+                      style={{ padding: "4px 8px", fontSize: "0.75rem", width: "auto" }}
+                    >
+                      <option value="muted">🔇 Mute Original (100% Translated)</option>
+                      <option value="ducked">🔉 15% Ducked</option>
+                      <option value="normal">🔊 Normal (100%)</option>
+                    </select>
+                  </div>
+                )}
               </div>
 
               <Button
@@ -1216,6 +1706,131 @@ export default function VideoMeetComponent() {
         </div>
       ) : (
         <div className={styles.meetVideoContainer}>
+          {/* Real-time language toast notification */}
+          {languageToast && (
+            <div className={styles.languageToastNotification}>
+              <span>🌐 {languageToast}</span>
+            </div>
+          )}
+
+          {/* Quick Language & Voice Dubbing Bar (Top of Call) */}
+          <div className={styles.quickLanguageBar}>
+            <div className={styles.quickLangItem}>
+              <span className={styles.quickLangLabel}>🎤 My Voice:</span>
+              <select
+                className={styles.quickLangSelect}
+                value={spokenLanguage}
+                onChange={(e) => handleSpokenLanguageChange(e.target.value)}
+                title="Select language you speak into microphone"
+              >
+                <optgroup label="🇮🇳 Indian Regional Languages">
+                  {INDIAN_LANGUAGES.map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.name}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="🌍 International Languages">
+                  {INTERNATIONAL_LANGUAGES.map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.name}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
+
+            <div className={styles.quickLangItem}>
+              <span className={styles.quickLangLabel}>🎧 Translate To:</span>
+              <select
+                className={styles.quickLangSelect}
+                value={captionLanguage}
+                onChange={(e) => handleCaptionLanguageChange(e.target.value)}
+                title="Select language you want to hear and read"
+              >
+                <optgroup label="🇮🇳 Indian Regional Languages">
+                  {INDIAN_LANGUAGES.map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.name}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="🌍 International Languages">
+                  {INTERNATIONAL_LANGUAGES.map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.name}
+                    </option>
+                  ))}
+                </optgroup>
+              </select>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleToggleAudioDubbing}
+              className={`${styles.quickDubbingBtn} ${
+                audioDubbing ? styles.quickDubbingBtnActive : styles.quickDubbingBtnInactive
+              }`}
+              title={
+                audioDubbing
+                  ? "Live Audio Dubbing is ACTIVE - Click to turn OFF"
+                  : "Click to turn ON Live Audio Dubbing"
+              }
+            >
+              {audioDubbing ? <VolumeUpIcon sx={{ fontSize: 18 }} /> : <VolumeOffIcon sx={{ fontSize: 18 }} />}
+              <span>{audioDubbing ? `Dubbing: ON (${captionLanguage.toUpperCase()})` : "Dubbing: OFF"}</span>
+            </button>
+
+            {audioDubbing && (
+              <div className={styles.quickLangItem}>
+                <span className={styles.quickLangLabel} style={{ fontSize: "0.75rem" }}>
+                  Original:
+                </span>
+                <select
+                  className={styles.quickLangSelect}
+                  value={originalAudioVolume}
+                  onChange={(e) => setOriginalAudioVolume(e.target.value)}
+                  style={{ padding: "3px 6px", fontSize: "0.75rem", maxWidth: "120px" }}
+                  title="Volume of remote speaker's original voice"
+                >
+                  <option value="muted">🔇 Mute Original (100% Translated)</option>
+                  <option value="ducked">🔉 15% Ducked</option>
+                  <option value="normal">🔊 100% Normal</option>
+                </select>
+              </div>
+            )}
+
+            {videos.length > 0 && (
+              <div className={styles.quickLangItem}>
+                <span className={styles.quickLangLabel} style={{ fontSize: "0.75rem", color: "#818cf8" }}>
+                  👤 Friend Voice:
+                </span>
+                <select
+                  className={styles.quickLangSelect}
+                  value={peerLanguages[videos[0]?.socketId]?.spokenLang || "hi"}
+                  onChange={(e) => handleRequestFriendLanguage(videos[0]?.socketId, e.target.value)}
+                  style={{ padding: "3px 6px", fontSize: "0.75rem", maxWidth: "120px" }}
+                  title="Change what language your friend speaks into mic"
+                >
+                  <optgroup label="🇮🇳 Indian Regional Languages">
+                    {INDIAN_LANGUAGES.map((l) => (
+                      <option key={l.code} value={l.code}>
+                        {l.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="🌍 International Languages">
+                    {INTERNATIONAL_LANGUAGES.map((l) => (
+                      <option key={l.code} value={l.code}>
+                        {l.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+              </div>
+            )}
+          </div>
+
           {showModal ? (
             <div className={styles.chatRoom}>
               <div className={styles.chatContainer}>
@@ -1405,7 +2020,27 @@ export default function VideoMeetComponent() {
             </IconButton>
 
             <IconButton
-              onClick={() => setCaptionsEnabled(!captionsEnabled)}
+              onClick={handleToggleAudioDubbing}
+              style={{
+                color: audioDubbing ? "#10b981" : "#94a3b8",
+                backgroundColor: audioDubbing ? "rgba(16, 185, 129, 0.2)" : undefined,
+                border: audioDubbing ? "1px solid rgba(16, 185, 129, 0.4)" : undefined,
+              }}
+              title={
+                audioDubbing
+                  ? "Live Audio Dubbing is ACTIVE - Click to turn OFF"
+                  : "Turn ON Live Audio Dubbing"
+              }
+            >
+              {audioDubbing ? <VolumeUpIcon /> : <VolumeOffIcon />}
+            </IconButton>
+
+            <IconButton
+              onClick={() => {
+                const nextVal = !captionsEnabled;
+                setCaptionsEnabled(nextVal);
+                captionsEnabledRef.current = nextVal;
+              }}
               style={{
                 color: captionsEnabled ? "#38bdf8" : "#94a3b8",
                 backgroundColor: captionsEnabled ? "rgba(56, 189, 248, 0.2)" : undefined,
@@ -1442,6 +2077,21 @@ export default function VideoMeetComponent() {
                         {activeCaption.fromLang} → {activeCaption.toLang}
                       </span>
                     )}
+                  {activeCaption.fromGroq && (
+                    <span
+                      style={{
+                        background: "rgba(99, 102, 241, 0.25)",
+                        border: "1px solid rgba(129, 140, 248, 0.4)",
+                        color: "#c7d2fe",
+                        fontSize: "0.7rem",
+                        padding: "1px 7px",
+                        borderRadius: "6px",
+                        fontWeight: 600,
+                      }}
+                    >
+                      ⚡ Groq Whisper
+                    </span>
+                  )}
                   {audioDubbing && !activeCaption.isMe && (
                     <span className={styles.captionDubbingTag}>
                       🔊 Voice Dubbing
@@ -1488,7 +2138,10 @@ export default function VideoMeetComponent() {
                   <input
                     type="checkbox"
                     checked={captionsEnabled}
-                    onChange={(e) => setCaptionsEnabled(e.target.checked)}
+                    onChange={(e) => {
+                      setCaptionsEnabled(e.target.checked);
+                      captionsEnabledRef.current = e.target.checked;
+                    }}
                     style={{
                       width: 18,
                       height: 18,
@@ -1505,7 +2158,7 @@ export default function VideoMeetComponent() {
                   <select
                     className={styles.captionSelect}
                     value={spokenLanguage}
-                    onChange={(e) => setSpokenLanguage(e.target.value)}
+                    onChange={(e) => handleSpokenLanguageChange(e.target.value)}
                   >
                     <optgroup label="🇮🇳 Indian Regional Languages">
                       {INDIAN_LANGUAGES.map((lang) => (
@@ -1531,7 +2184,7 @@ export default function VideoMeetComponent() {
                   <select
                     className={styles.captionSelect}
                     value={captionLanguage}
-                    onChange={(e) => setCaptionLanguage(e.target.value)}
+                    onChange={(e) => handleCaptionLanguageChange(e.target.value)}
                   >
                     <optgroup label="🇮🇳 Indian Regional Languages">
                       {INDIAN_LANGUAGES.map((lang) => (
@@ -1562,13 +2215,7 @@ export default function VideoMeetComponent() {
                   <input
                     type="checkbox"
                     checked={audioDubbing}
-                    onChange={(e) => {
-                      const nextVal = e.target.checked;
-                      setAudioDubbing(nextVal);
-                      if (nextVal) {
-                        speakTranslatedAudio("Audio dubbing enabled", captionLanguage);
-                      }
-                    }}
+                    onChange={handleToggleAudioDubbing}
                     style={{
                       width: 18,
                       height: 18,
@@ -1582,10 +2229,11 @@ export default function VideoMeetComponent() {
                   <button
                     type="button"
                     onClick={() => {
-                      speakTranslatedAudio(
-                        "Hello! Audio dubbing and speech translation are working in Nexivo.",
-                        captionLanguage
-                      );
+                      const testMsg =
+                        captionLanguage === "hi"
+                          ? "नमस्ते! नेक्सिवो लाइव वॉइस डबिंग काम कर रही है।"
+                          : "Hello! Live audio dubbing and speech translation are working in Nexivo.";
+                      speakTranslatedAudio(testMsg, captionLanguage);
                     }}
                     style={{
                       background: "rgba(99, 102, 241, 0.2)",
@@ -1629,9 +2277,9 @@ export default function VideoMeetComponent() {
                       className={styles.captionSelect}
                       style={{ padding: "4px 8px", fontSize: "0.78rem", width: "auto" }}
                     >
-                      <option value="ducked">Ducked (20% Quiet)</option>
-                      <option value="muted">Mute (0% English only)</option>
-                      <option value="normal">Normal (100%)</option>
+                      <option value="muted">🔇 Mute Original (100% Translated)</option>
+                      <option value="ducked">🔉 Ducked (15% Quiet)</option>
+                      <option value="normal">🔊 Normal (100%)</option>
                     </select>
                   </div>
                 )}
@@ -1687,6 +2335,10 @@ export default function VideoMeetComponent() {
           ))}
 
           <div className={styles.meetUserVideoWrapper}>
+            <div className={styles.peerLangBadge} style={{ top: 8, left: 8, fontSize: "0.72rem", padding: "2px 8px" }}>
+              <span className={styles.liveSpeechPulse}></span>
+              <span>🎤 Mic: {SUPPORTED_LANGUAGES.find((l) => l.code === spokenLanguage)?.name?.split(" ")[0] || spokenLanguage}</span>
+            </div>
             <video
               ref={(el) => {
                 localVideoref.current = el;
@@ -1731,6 +2383,19 @@ export default function VideoMeetComponent() {
 
                 return (
                   <div key={videoItem.socketId} className={styles.mainVideoTile}>
+                    {/* Live language and voice dubbing badge on friend's video */}
+                    <div className={styles.peerLangBadge}>
+                      <span className={styles.liveSpeechPulse}></span>
+                      <span>
+                        👤 {SUPPORTED_LANGUAGES.find((l) => l.code === (peerLanguages[videoItem.socketId]?.spokenLang || "hi"))?.name?.split(" ")[0] || "Hindi"}
+                      </span>
+                      {audioDubbing && (
+                        <span className={styles.peerDubbingActiveBadge} style={{ borderRadius: "10px", padding: "1px 6px" }}>
+                          🔊 Dubbed: {captionLanguage.toUpperCase()}
+                        </span>
+                      )}
+                    </div>
+
                     {/* Dedicated remote audio element guarantees speech audio plays even if video is paused or camera is off */}
                     <audio
                       data-remote="true"
@@ -1741,7 +2406,9 @@ export default function VideoMeetComponent() {
                           if (audioEl.srcObject !== videoItem.stream) {
                             audioEl.srcObject = videoItem.stream;
                           }
-                          audioEl.volume = getPeerAudioVolume();
+                          const vol = getPeerAudioVolume();
+                          audioEl.volume = vol;
+                          audioEl.muted = (vol === 0);
                           audioEl.play().catch((err) => {
                             console.warn("Audio element autoplay waiting for user gesture:", err);
                           });
@@ -1784,6 +2451,7 @@ export default function VideoMeetComponent() {
               })
             )}
           </div>
+
         </div>
       )}
     </div>

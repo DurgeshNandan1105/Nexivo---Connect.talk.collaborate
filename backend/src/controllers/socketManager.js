@@ -1,6 +1,7 @@
 import { Server } from "socket.io"
 import { translateText } from "./translate.controller.js";
 import { GeminiLiveSession } from "./geminiLiveStream.js";
+import { processAudioWithGroqWhisper } from "../services/groqService.js";
 
 let connections = {}
 let messages = {}
@@ -137,6 +138,136 @@ const connectToSocket = (server) => {
                 };
                 connections[matchingRoom].forEach((elem) => {
                     io.to(elem).emit("live-speech-caption", payload);
+                });
+            }
+        });
+
+        socket.on("groq-audio-chunk", async (chunkData) => {
+            const [matchingRoom, found] = Object.entries(connections)
+            .reduce(([room, isFound], [roomKey, roomValue]) => {
+                if(!isFound && roomValue.includes(socket.id)){
+                    return [roomKey, true];
+                }
+                return [room, isFound];
+            }, ['', false]);
+
+            if (found === true && chunkData) {
+                try {
+                    const { audioBuffer, mimeType, spokenLang, targetLang, sender } = chunkData;
+                    let buf = audioBuffer;
+                    if (audioBuffer instanceof ArrayBuffer) {
+                        buf = Buffer.from(audioBuffer);
+                    } else if (!Buffer.isBuffer(audioBuffer)) {
+                        buf = Buffer.from(audioBuffer);
+                    }
+
+                    const result = await processAudioWithGroqWhisper({
+                        audioBuffer: buf,
+                        mimeType: mimeType || "audio/webm",
+                        spokenLang: spokenLang || "hi",
+                        targetLang: targetLang || "en"
+                    });
+
+                    if (result && result.rateLimited) {
+                        socket.emit("groq-rate-limited", { retryAfter: result.retryAfter || 5000 });
+                        return;
+                    }
+
+                    if (result && result.translatedText) {
+                        const payload = {
+                            text: result.translatedText,
+                            originalText: result.originalText || "",
+                            sender: sender || "Guest",
+                            spokenLang: result.from || spokenLang || "hi",
+                            targetLang: result.to || targetLang || "en",
+                            isFinal: true,
+                            fromGroqWhisper: true,
+                            socketIdSender: socket.id,
+                            timestamp: Date.now()
+                        };
+
+                        connections[matchingRoom].forEach((elem) => {
+                            io.to(elem).emit("live-speech-caption", payload);
+                        });
+                    }
+                } catch (err) {
+                    if (
+                        err.message !== "GROQ_API_KEY_NOT_CONFIGURED" &&
+                        !err.message.includes("429") &&
+                        !err.message.includes("rate_limit_exceeded")
+                    ) {
+                        console.warn("Groq audio chunk error:", err.message);
+                    }
+                }
+            }
+        });
+
+        socket.on("peer-language-update", (data) => {
+            const [matchingRoom, found] = Object.entries(connections)
+            .reduce(([room, isFound], [roomKey, roomValue]) => {
+                if(!isFound && roomValue.includes(socket.id)){
+                    return [roomKey, true];
+                }
+                return [room, isFound];
+            }, ['', false]);
+
+            if (found === true) {
+                connections[matchingRoom].forEach((elem) => {
+                    if (elem !== socket.id) {
+                        io.to(elem).emit("peer-language-update", {
+                            ...data,
+                            socketIdSender: socket.id
+                        });
+                    }
+                });
+            }
+        });
+
+        socket.on("peer-language-request", (data) => {
+            if (data?.targetSocketId) {
+                io.to(data.targetSocketId).emit("peer-language-request", {
+                    ...data,
+                    fromSocketId: socket.id
+                });
+            } else {
+                const [matchingRoom, found] = Object.entries(connections)
+                .reduce(([room, isFound], [roomKey, roomValue]) => {
+                    if(!isFound && roomValue.includes(socket.id)){
+                        return [roomKey, true];
+                    }
+                    return [room, isFound];
+                }, ['', false]);
+
+                if (found === true) {
+                    connections[matchingRoom].forEach((elem) => {
+                        if (elem !== socket.id) {
+                            io.to(elem).emit("peer-language-request", {
+                                ...data,
+                                fromSocketId: socket.id
+                            });
+                        }
+                    });
+                }
+            }
+        });
+
+        socket.on("peer-dubbing-state", (data) => {
+            const [matchingRoom, found] = Object.entries(connections)
+            .reduce(([room, isFound], [roomKey, roomValue]) => {
+                if(!isFound && roomValue.includes(socket.id)){
+                    return [roomKey, true];
+                }
+                return [room, isFound];
+            }, ['', false]);
+
+            if (found === true) {
+                connections[matchingRoom].forEach((elem) => {
+                    if (elem !== socket.id) {
+                        io.to(elem).emit("peer-dubbing-state", {
+                            ...data,
+                            socketIdSender: socket.id
+                        });
+                    }
                 });
             }
         });

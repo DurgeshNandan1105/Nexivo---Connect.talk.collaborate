@@ -674,3 +674,158 @@
     display: block;
     margin-bottom: 2px;
 }
+
+/* Quick Language & Voice Dubbing Bar (Top of Call) */
+.quickLanguageBar {
+    position: absolute;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 20;
+    background: rgba(15, 23, 42, 0.88);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 16px;
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.6);
+    max-width: 96vw;
+    flex-wrap: wrap;
+    justify-content: center;
+    transition: all 0.3s ease;
+}
+
+.quickLangItem {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: #cbd5e1;
+}
+
+.quickLangLabel {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 600;
+    color: #94a3b8;
+    white-space: nowrap;
+}
+
+.quickLangSelect {
+    background: rgba(30, 41, 59, 0.9);
+    color: #f8fafc;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 8px;
+    padding: 5px 8px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.2s;
+    max-width: 155px;
+}
+
+.quickLangSelect:focus {
+    border-color: #818cf8;
+}
+
+.quickLangSelect option {
+    background: #0f172a;
+    color: #f8fafc;
+}
+
+.quickDubbingBtn {
+    border: none;
+    border-radius: 10px;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.quickDubbingBtnActive {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    color: #ffffff;
+    box-shadow: 0 4px 14px rgba(16, 185, 129, 0.4);
+    border: 1px solid rgba(16, 185, 129, 0.6);
+}
+
+.quickDubbingBtnInactive {
+    background: rgba(255, 255, 255, 0.08);
+    color: #94a3b8;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.quickDubbingBtnInactive:hover {
+    background: rgba(255, 255, 255, 0.14);
+    color: #f8fafc;
+}
+
+.languageToastNotification {
+    position: absolute;
+    top: 74px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+    background: rgba(16, 185, 129, 0.92);
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 0.85rem;
+    padding: 8px 18px;
+    border-radius: 20px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+    animation: toastFade 0.3s ease-out;
+}
+
+@keyframes toastFade {
+    from { opacity: 0; transform: translate(-50%, -10px); }
+    to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.peerLangBadge {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    z-index: 8;
+    background: rgba(15, 23, 42, 0.85);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #e2e8f0;
+    font-size: 0.76rem;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+}
+
+.peerDubbingActiveBadge {
+    background: rgba(16, 185, 129, 0.25);
+    border-color: rgba(16, 185, 129, 0.6);
+    color: #6ee7b7;
+}
+
+.liveSpeechPulse {
+    width: 8px;
+    height: 8px;
+    background-color: #10b981;
+    border-radius: 50%;
+    animation: livePulse 1.2s infinite;
+}
+
+@keyframes livePulse {
+    0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+    70% { transform: scale(1.1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+    100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
