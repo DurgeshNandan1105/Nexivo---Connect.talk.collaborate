@@ -99,15 +99,33 @@ export default function VideoMeetComponent() {
     return 1.0;
   };
 
-  // Dynamic volume adjustment for remote peer audio when voice dubbing is active
-  useEffect(() => {
-    const vol = getPeerAudioVolume();
+  const applyRemoteAudioVolume = (vol) => {
+    // 1. Mute/unmute all dedicated audio elements
     document.querySelectorAll("audio[data-remote='true']").forEach((audioEl) => {
       audioEl.volume = vol;
       audioEl.muted = (vol === 0);
     });
+    // 2. Guarantee all video elements remain completely muted
+    document.querySelectorAll("video[data-socket]").forEach((vidEl) => {
+      vidEl.muted = true;
+      vidEl.volume = 0;
+    });
+    // 3. Physically enable/disable audio tracks on WebRTC streams
+    Object.values(peerStreamsRef.current || {}).forEach((st) => {
+      if (st && st.getAudioTracks) {
+        st.getAudioTracks().forEach((track) => {
+          track.enabled = (vol > 0);
+        });
+      }
+    });
+  };
+
+  // Dynamic volume adjustment for remote peer audio when voice dubbing is active
+  useEffect(() => {
+    const vol = getPeerAudioVolume();
+    applyRemoteAudioVolume(vol);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioDubbing, originalAudioVolume, isDubbingSpeaking]);
+  }, [audioDubbing, originalAudioVolume, isDubbingSpeaking, videos]);
 
   // Hook into real-time TTS speech activity for instant zero-lag audio ducking
   useEffect(() => {
@@ -120,10 +138,7 @@ export default function VideoMeetComponent() {
         : originalAudioVolume === "muted"
         ? 0.0
         : 0.15;
-      document.querySelectorAll("audio[data-remote='true']").forEach((audioEl) => {
-        audioEl.volume = vol;
-        audioEl.muted = (vol === 0);
-      });
+      applyRemoteAudioVolume(vol);
     });
     return () => unregister();
   }, [originalAudioVolume]);
@@ -538,15 +553,15 @@ export default function VideoMeetComponent() {
               sum += v * v;
             }
             const rms = Math.sqrt(sum / dataArray.length);
-            // Speech threshold: rms > 0.028 indicates human voice
-            if (rms > 0.028) {
+            // Sensitive speech threshold: rms > 0.008 reliably catches normal speech and whispers
+            if (rms > 0.008) {
               speechTicks++;
             }
           }, 100);
         }
       } catch (vadErr) {
         // Fallback: if Web Audio fails, allow recording through
-        speechTicks = 6;
+        speechTicks = 5;
       }
 
       const options = mimeType ? { mimeType, audioBitsPerSecond: 64000 } : { audioBitsPerSecond: 64000 };
@@ -567,14 +582,14 @@ export default function VideoMeetComponent() {
         const now = Date.now();
         const canSendGroq =
           now >= (groqCooldownUntilRef.current || 0) &&
-          now - (lastGroqEmitTimeRef.current || 0) >= 3600;
+          now - (lastGroqEmitTimeRef.current || 0) >= 3200;
 
-        // Only upload to Groq Whisper if:
-        // 1. Sustained speech was detected (at least 400ms = 4 ticks of energy)
-        // 2. Cooldown is satisfied & at least 3.6s passed since last send (protecting 20 RPM limit)
-        // 3. Audio chunk has enough data
+        // Upload to Groq Whisper if:
+        // 1. Speech was detected (at least 1 tick of audio energy > 0.008)
+        // 2. Cooldown is satisfied & at least 3.2s passed since last send
+        // 3. Audio chunk has enough data (> 2000 bytes)
         if (
-          speechTicks >= 4 &&
+          speechTicks >= 1 &&
           canSendGroq &&
           chunks.length > 0 &&
           socketRef.current &&
@@ -585,7 +600,7 @@ export default function VideoMeetComponent() {
           const blob = new Blob(chunks, { type: actualMime });
           chunks = [];
 
-          if (blob.size > 3000) {
+          if (blob.size > 2000) {
             try {
               const arrayBuffer = await blob.arrayBuffer();
               if (socketRef.current) {
@@ -608,19 +623,19 @@ export default function VideoMeetComponent() {
 
         // Loop continuous slicing while call is active and mic unmuted
         if (isGroqRecordingRef.current && audioRef.current && !askForUsernameRef.current) {
-          setTimeout(startGroqAudioRecorder, 100);
+          setTimeout(startGroqAudioRecorder, 80);
         }
       };
 
       recorder.start();
       groqRecorderRef.current = recorder;
 
-      // Slice audio in 3.8-second intervals (max ~15 req/min, safely below Groq's 20 RPM limit)
+      // Slice audio in 3.5-second intervals (~17 req/min max, safely below Groq's 20 RPM limit)
       groqSliceTimeoutRef.current = setTimeout(() => {
         if (recorder.state === "recording") {
           recorder.stop();
         }
-      }, 3800);
+      }, 3500);
     } catch (err) {
       console.warn("Could not start Groq MediaRecorder:", err);
     }
@@ -795,9 +810,17 @@ export default function VideoMeetComponent() {
       if (fromGroqWhisper) {
         // Groq Whisper delivered completed neural translation chunk!
         const cleanToSpeak = displayText.trim();
-        const lastQueued = lastQueuedAudioRef.current[socketIdSender] || "";
-        if (lastQueued !== cleanToSpeak) {
-          lastQueuedAudioRef.current[socketIdSender] = cleanToSpeak;
+        const lastQueuedObj = lastQueuedAudioRef.current[socketIdSender];
+        const isRecentDuplicate =
+          lastQueuedObj &&
+          lastQueuedObj.text === cleanToSpeak &&
+          Date.now() - lastQueuedObj.time < 3500;
+
+        if (!isRecentDuplicate && cleanToSpeak) {
+          lastQueuedAudioRef.current[socketIdSender] = {
+            text: cleanToSpeak,
+            time: Date.now(),
+          };
           queueTranslatedAudio(cleanToSpeak, myTargetLang);
         }
       } else {
@@ -811,10 +834,18 @@ export default function VideoMeetComponent() {
           const trimmed = chunkToSpeak.trim();
           if (!trimmed) return;
 
-          // Skip exact duplicate if already queued recently
-          const lastQueued = lastQueuedAudioRef.current[socketIdSender] || "";
-          if (lastQueued === trimmed) return;
-          lastQueuedAudioRef.current[socketIdSender] = trimmed;
+          // Skip exact duplicate if already queued recently (within 3.5s)
+          const lastQueuedObj = lastQueuedAudioRef.current[socketIdSender];
+          const isRecentDuplicate =
+            lastQueuedObj &&
+            lastQueuedObj.text === trimmed &&
+            Date.now() - lastQueuedObj.time < 3500;
+
+          if (isRecentDuplicate) return;
+          lastQueuedAudioRef.current[socketIdSender] = {
+            text: trimmed,
+            time: Date.now(),
+          };
 
           if (actualSourceLang !== myTargetLang) {
             translateText(trimmed, myTargetLang, actualSourceLang, socketRef.current)
@@ -2409,9 +2440,16 @@ export default function VideoMeetComponent() {
                           const vol = getPeerAudioVolume();
                           audioEl.volume = vol;
                           audioEl.muted = (vol === 0);
-                          audioEl.play().catch((err) => {
-                            console.warn("Audio element autoplay waiting for user gesture:", err);
-                          });
+                          if (videoItem.stream.getAudioTracks) {
+                            videoItem.stream.getAudioTracks().forEach((track) => {
+                              track.enabled = (vol > 0);
+                            });
+                          }
+                          if (vol > 0) {
+                            audioEl.play().catch((err) => {
+                              console.warn("Audio element autoplay waiting for user gesture:", err);
+                            });
+                          }
                         }
                       }}
                     />
@@ -2422,6 +2460,8 @@ export default function VideoMeetComponent() {
                           if (ref.srcObject !== videoItem.stream) {
                             ref.srcObject = videoItem.stream;
                           }
+                          ref.muted = true;
+                          ref.volume = 0;
                           ref.play().catch((err) => console.log("Auto-play error:", err));
                         }
                       }}

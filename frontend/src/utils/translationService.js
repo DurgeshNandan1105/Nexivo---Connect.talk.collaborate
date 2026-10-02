@@ -241,28 +241,43 @@ const playWithHtmlAudio = (cleanText, langCode) => {
       const audio = new Audio(url);
       currentPlayingAudio = audio;
 
+      let timer = null;
+      let hasFinished = false;
+
+      const finish = (err = null) => {
+        if (hasFinished) return;
+        hasFinished = true;
+        if (timer) clearTimeout(timer);
+        currentPlayingAudio = null;
+        notifySpeechActivity(false);
+        if (err) reject(err);
+        else resolve();
+      };
+
+      // Watchdog: If audio doesn't start or finish within 4.5s, fall back to Web Speech
+      timer = setTimeout(() => {
+        if (!hasFinished) {
+          try { audio.pause(); audio.src = ""; } catch (e) {}
+          finish(new Error("HTML Audio TTS timeout, falling back to Web Speech"));
+        }
+      }, 4500);
+
       audio.onplay = () => {
         notifySpeechActivity(true);
       };
 
       audio.onended = () => {
-        currentPlayingAudio = null;
-        notifySpeechActivity(false);
-        resolve();
+        finish();
       };
 
       audio.onerror = (e) => {
-        currentPlayingAudio = null;
-        notifySpeechActivity(false);
-        reject(e);
+        finish(e);
       };
 
       const playPromise = audio.play();
       if (playPromise !== undefined) {
         playPromise.catch((err) => {
-          currentPlayingAudio = null;
-          notifySpeechActivity(false);
-          reject(err);
+          finish(err);
         });
       }
     } catch (err) {
