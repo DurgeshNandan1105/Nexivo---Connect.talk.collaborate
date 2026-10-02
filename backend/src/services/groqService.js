@@ -2,6 +2,15 @@ import { translateText } from "../controllers/translate.controller.js";
 
 let rateLimitedUntil = 0;
 let lastWarningTime = 0;
+const WHISPER_LANGUAGE_CODES = new Set([
+  "ar", "as", "bn", "de", "en", "es", "fr", "gu", "hi", "it", "ja", "kn", "ko",
+  "ml", "mr", "ne", "or", "pa", "pt", "ru", "sd", "ta", "te", "tr", "ur", "zh",
+]);
+
+const getWhisperLanguageHint = (language) => {
+  if (language === "zh-CN") return "zh";
+  return WHISPER_LANGUAGE_CODES.has(language) ? language : null;
+};
 
 /**
  * Transcribe or translate an audio slice using Groq Whisper Cloud API
@@ -47,8 +56,9 @@ export const processAudioWithGroqWhisper = async ({
     fd.append("model", chosenModel);
     fd.append("response_format", "json");
     fd.append("temperature", "0");
-    if (chosenLang && chosenLang !== "auto") {
-      fd.append("language", chosenLang.toLowerCase().split("-")[0]);
+    const whisperLanguage = getWhisperLanguageHint(chosenLang);
+    if (whisperLanguage) {
+      fd.append("language", whisperLanguage);
     }
     fd.append("file", blob, `audio_chunk.${ext}`);
     return fd;
@@ -70,7 +80,7 @@ export const processAudioWithGroqWhisper = async ({
     });
   } catch (netErr) {
     console.warn("Groq network error:", netErr.message);
-    return null;
+    return { unavailable: true };
   }
 
   // Handle 429 Rate Limit with fallback to whisper-large-v3-turbo
@@ -108,7 +118,7 @@ export const processAudioWithGroqWhisper = async ({
   } else if (!response.ok) {
     const errorBody = await response.text();
     console.warn(`Groq Whisper API responded with ${response.status}: ${errorBody}`);
-    return null;
+    return { unavailable: true };
   }
 
   const result = await response.json();
@@ -156,6 +166,28 @@ export const processAudioWithGroqWhisper = async ({
   }
 
   if (isDirectTranslateToEnglish && model !== "whisper-large-v3-turbo") {
+    // The audio-translation endpoint normally returns English. Confirm with
+    // auto-detected text translation as a guard for clips it returns in source language.
+    if (spokenLang && spokenLang !== "en") {
+      try {
+        const englishCheck = await translateText(text, "en", "auto");
+        if (
+          englishCheck?.translatedText &&
+          !englishCheck.error &&
+          englishCheck.translatedText.trim() !== text
+        ) {
+          return {
+            translatedText: englishCheck.translatedText,
+            originalText: "",
+            from: spokenLang,
+            to: "en",
+          };
+        }
+      } catch (e) {
+        console.warn("English output verification error:", e);
+      }
+    }
+
     return {
       translatedText: text,
       originalText: "",
@@ -165,14 +197,35 @@ export const processAudioWithGroqWhisper = async ({
   } else {
     let translated = text;
     if (targetLang && targetLang !== spokenLang) {
+      let transRes = null;
       try {
-        const transRes = await translateText(text, targetLang, spokenLang);
-        if (transRes && transRes.translatedText) {
-          translated = transRes.translatedText;
-        }
+        transRes = await translateText(text, targetLang, spokenLang);
       } catch (e) {
         console.warn("Translation after Groq Whisper transcription error:", e);
       }
+
+      // Retry with language auto-detection if a regional code is rejected or the
+      // provider silently returns the source text unchanged.
+      if (
+        !transRes?.translatedText ||
+        transRes.error ||
+        transRes.translatedText.trim() === text.trim()
+      ) {
+        try {
+          transRes = await translateText(text, targetLang, "auto");
+        } catch (e) {
+          console.warn("Auto-detected translation retry error:", e);
+        }
+      }
+
+      if (
+        !transRes?.translatedText ||
+        transRes.error ||
+        transRes.translatedText.trim() === text.trim()
+      ) {
+        return null;
+      }
+      translated = transRes.translatedText;
     }
 
     return {

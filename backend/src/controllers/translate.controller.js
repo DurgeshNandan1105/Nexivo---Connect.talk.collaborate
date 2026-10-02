@@ -6,9 +6,29 @@ const translationCache = new Map();
 const MAX_CACHE_SIZE = 2000;
 
 export const SUPPORTED_LANGUAGES = [
+  { code: "hi", name: "Hindi (हिन्दी)", speechCode: "hi-IN" },
+  { code: "bn", name: "Bengali (বাংলা)", speechCode: "bn-IN" },
+  { code: "te", name: "Telugu (తెలుగు)", speechCode: "te-IN" },
+  { code: "mr", name: "Marathi (मराठी)", speechCode: "mr-IN" },
+  { code: "ta", name: "Tamil (தமிழ்)", speechCode: "ta-IN" },
+  { code: "ur", name: "Urdu (اردو)", speechCode: "ur-IN" },
+  { code: "gu", name: "Gujarati (ગુજરાતી)", speechCode: "gu-IN" },
+  { code: "kn", name: "Kannada (ಕನ್ನಡ)", speechCode: "kn-IN" },
+  { code: "ml", name: "Malayalam (മലയാളം)", speechCode: "ml-IN" },
+  { code: "pa", name: "Punjabi (ਪੰਜਾਬੀ)", speechCode: "pa-IN" },
+  { code: "or", name: "Odia (ଓଡ଼ିଆ)", speechCode: "or-IN" },
+  { code: "as", name: "Assamese (অসমীয়া)", speechCode: "as-IN" },
+  { code: "bho", name: "Bhojpuri (भोजपुरी)", speechCode: "hi-IN" },
+  { code: "mai", name: "Maithili (मैथिली)", speechCode: "hi-IN" },
+  { code: "sa", name: "Sanskrit (संस्कृतम्)", speechCode: "hi-IN" },
+  { code: "kok", name: "Konkani (कोंकणी)", speechCode: "hi-IN" },
+  { code: "doi", name: "Dogri (डोगरी)", speechCode: "hi-IN" },
+  { code: "sd", name: "Sindhi (سنڌي)", speechCode: "sd-IN" },
+  { code: "ne", name: "Nepali (नेपाली)", speechCode: "ne-NP" },
+  { code: "mni-Mtei", name: "Manipuri / Meitei (মৈতৈ)", speechCode: "bn-IN" },
+  { code: "lus", name: "Mizo (Lushai)", speechCode: "en-IN" },
   { code: "en", name: "English", speechCode: "en-US" },
   { code: "es", name: "Spanish (Español)", speechCode: "es-ES" },
-  { code: "hi", name: "Hindi (हिन्दी)", speechCode: "hi-IN" },
   { code: "fr", name: "French (Français)", speechCode: "fr-FR" },
   { code: "de", name: "German (Deutsch)", speechCode: "de-DE" },
   { code: "zh-CN", name: "Chinese (Mandarin)", speechCode: "zh-CN" },
@@ -18,17 +38,18 @@ export const SUPPORTED_LANGUAGES = [
   { code: "pt", name: "Portuguese (Português)", speechCode: "pt-BR" },
   { code: "it", name: "Italian (Italiano)", speechCode: "it-IT" },
   { code: "ko", name: "Korean (한국어)", speechCode: "ko-KR" },
-  { code: "bn", name: "Bengali (বাংলা)", speechCode: "bn-IN" },
-  { code: "ur", name: "Urdu (اردو)", speechCode: "ur-PK" },
   { code: "tr", name: "Turkish (Türkçe)", speechCode: "tr-TR" },
 ];
+
+const TRANSLATION_LANGUAGE_MAP = { kok: "gom" };
+const normalizeTranslationLanguage = (code) => TRANSLATION_LANGUAGE_MAP[code] || code;
 
 /**
  * Fetch translation from high-speed, unblocked Google API endpoint
  */
 const fetchDirectTranslation = async (text, targetLang, sourceLang = "auto") => {
-  const sl = sourceLang || "auto";
-  const tl = targetLang || "en";
+  const sl = normalizeTranslationLanguage(sourceLang || "auto");
+  const tl = normalizeTranslationLanguage(targetLang || "en");
   const url = `https://translate.googleapis.com/translate_a/single?client=dict-chrome-ex&sl=${sl}&tl=${tl}&dt=t&q=${encodeURIComponent(text)}`;
 
   const response = await fetch(url, {
@@ -92,9 +113,9 @@ export const translateText = async (text, targetLang = "en", sourceLang = "auto"
 
   // 2. Secondary: @vitalets/google-translate-api
   try {
-    const options = { to: targetLang };
+    const options = { to: normalizeTranslationLanguage(targetLang) };
     if (sourceLang && sourceLang !== "auto") {
-      options.from = sourceLang;
+      options.from = normalizeTranslationLanguage(sourceLang);
     }
 
     const res = await translate(cleanText, options);
@@ -164,7 +185,7 @@ const TTS_LANGUAGE_MAP = {
   sa: "hi",  // Sanskrit -> Hindi neural voice
   kok: "hi", // Konkani -> Hindi neural voice
   doi: "hi", // Dogri -> Hindi neural voice
-  sd: "hi",  // Sindhi -> Hindi neural voice
+  sd: "ur", // Sindhi -> Urdu voice, which can read the shared Arabic script
   as: "bn",  // Assamese -> Bengali neural voice
   "mni-Mtei": "bn", // Manipuri -> Bengali neural voice
   lus: "en", // Mizo -> English voice

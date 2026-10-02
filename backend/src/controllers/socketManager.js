@@ -173,6 +173,11 @@ const connectToSocket = (server) => {
                         return;
                     }
 
+                    if (result && result.unavailable) {
+                        socket.emit("speech-recognition-fallback");
+                        return;
+                    }
+
                     if (result && result.translatedText) {
                         const payload = {
                             text: result.translatedText,
@@ -191,6 +196,7 @@ const connectToSocket = (server) => {
                         });
                     }
                 } catch (err) {
+                    socket.emit("speech-recognition-fallback");
                     if (
                         err.message !== "GROQ_API_KEY_NOT_CONFIGURED" &&
                         !err.message.includes("429") &&

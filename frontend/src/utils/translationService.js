@@ -45,6 +45,9 @@ export const SUPPORTED_LANGUAGES = [
   ...INTERNATIONAL_LANGUAGES,
 ];
 
+const TRANSLATION_LANGUAGE_MAP = { kok: "gom" };
+const getTranslationLanguageCode = (code) => TRANSLATION_LANGUAGE_MAP[code] || code;
+
 const translationCache = new Map();
 
 /**
@@ -53,8 +56,8 @@ const translationCache = new Map();
  * cold starts, and datacenter IP rate limits.
  */
 const fetchDirectBrowserTranslation = async (text, targetLang, sourceLang = "auto") => {
-  const sl = sourceLang || "auto";
-  const tl = targetLang || "en";
+  const sl = getTranslationLanguageCode(sourceLang || "auto");
+  const tl = getTranslationLanguageCode(targetLang || "en");
   const url = `https://translate.googleapis.com/translate_a/single?client=dict-chrome-ex&sl=${sl}&tl=${tl}&dt=t&q=${encodeURIComponent(text)}`;
 
   const response = await fetch(url);
@@ -219,7 +222,7 @@ export const TTS_LANGUAGE_MAP = {
   sa: "hi",
   kok: "hi",
   doi: "hi",
-  sd: "hi",
+  sd: "ur",
   as: "bn",
   "mni-Mtei": "bn",
   lus: "en",

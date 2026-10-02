@@ -146,6 +146,8 @@ export default function VideoMeetComponent() {
   // Refs for async callbacks
   const recognitionRef = useRef(null);
   const recognitionRestartTimeoutRef = useRef(null);
+  const speechRecognitionUnavailableRef = useRef(false);
+  const permissionRequestRef = useRef(null);
   const captionsEnabledRef = useRef(true);
   const audioRef = useRef(true);
   const spokenLanguageRef = useRef("hi");
@@ -249,7 +251,10 @@ export default function VideoMeetComponent() {
   }, []);
 
   const getPermissions = async () => {
-    try {
+    if (permissionRequestRef.current) return permissionRequestRef.current;
+
+    const permissionRequest = (async () => {
+      try {
       if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
         setScreenAvailable(true);
       } else {
@@ -314,6 +319,15 @@ export default function VideoMeetComponent() {
     } catch (error) {
       console.error("Error in getPermissions:", error);
       return null;
+      }
+    })();
+    permissionRequestRef.current = permissionRequest;
+    try {
+      return await permissionRequest;
+    } finally {
+      if (permissionRequestRef.current === permissionRequest) {
+        permissionRequestRef.current = null;
+      }
     }
   };
 
@@ -412,7 +426,54 @@ export default function VideoMeetComponent() {
   };
 
   const startSpeechRecognition = () => {
-    // Disabled in favor of Groq Whisper Cloud API to eliminate Chrome's Google mic activation chime ("to-to")
+    // Browser recognition is a fallback when the cloud transcription service is unavailable.
+    if (typeof window === "undefined" || recognitionRef.current || speechRecognitionUnavailableRef.current || !audioRef.current || askForUsernameRef.current) return;
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) return;
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = SUPPORTED_LANGUAGES.find((lang) => lang.code === spokenLanguageRef.current)?.speechCode || "hi-IN";
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.onresult = (event) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          const text = result[0]?.transcript?.trim();
+          if (result.isFinal && text && socketRef.current?.connected) {
+            socketRef.current.emit("live-speech-caption", {
+              text,
+              originalText: text,
+              sender: username || "Guest",
+              spokenLang: spokenLanguageRef.current,
+              isFinal: true,
+              fromGroqWhisper: false,
+            });
+          }
+        }
+      };
+      recognition.onerror = (event) => {
+        if (event.error === "network" || event.error === "not-allowed" || event.error === "service-not-allowed") {
+          speechRecognitionUnavailableRef.current = true;
+        }
+        if (event.error !== "no-speech" && event.error !== "aborted") {
+          console.warn("Browser speech recognition error:", event.error);
+        }
+      };
+      recognition.onend = () => {
+        if (recognitionRef.current === recognition) {
+          recognitionRef.current = null;
+          if (audioRef.current && !askForUsernameRef.current) {
+            recognitionRestartTimeoutRef.current = setTimeout(startSpeechRecognition, 500);
+          }
+        }
+      };
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      recognitionRef.current = null;
+      console.warn("Could not start browser speech recognition:", err);
+    }
   };
 
   const stopGroqAudioRecorder = () => {
@@ -436,6 +497,11 @@ export default function VideoMeetComponent() {
     if (!window.localStream) return;
     const audioTracks = window.localStream.getAudioTracks();
     if (!audioTracks || audioTracks.length === 0 || !audioTracks[0].enabled) return;
+      // If this browser cannot record audio chunks, use its speech recognition fallback.
+      if (typeof MediaRecorder === "undefined") {
+        startSpeechRecognition();
+        return;
+      }
 
     stopGroqAudioRecorder();
     isGroqRecordingRef.current = true;
@@ -1194,6 +1260,11 @@ export default function VideoMeetComponent() {
       socketRef.current.on("groq-rate-limited", (data) => {
         const waitMs = (data && data.retryAfter) || 5000;
         groqCooldownUntilRef.current = Date.now() + waitMs;
+        startSpeechRecognition();
+      });
+
+      socketRef.current.on("speech-recognition-fallback", () => {
+        startSpeechRecognition();
       });
 
       socketRef.current.on("user-media-state", (data) => {
