@@ -14,7 +14,7 @@ const getWhisperLanguageHint = (language) => {
 
 /**
  * Transcribe or translate an audio slice using Groq Whisper Cloud API
- * - Primary: whisper-large-v3 (/audio/translations or /audio/transcriptions)
+ * - Primary: whisper-large-v3 (/audio/transcriptions + text translation)
  * - Fallback: whisper-large-v3-turbo (/audio/transcriptions + text translation)
  * - Built-in Circuit Breaker to prevent 429 rate limit spamming
  */
@@ -38,10 +38,10 @@ export const processAudioWithGroqWhisper = async ({
     return { rateLimited: true, retryAfter: Math.max(1000, rateLimitedUntil - Date.now()) };
   }
 
-  const isDirectTranslateToEnglish = (targetLang || "en").toLowerCase() === "en";
-  let endpoint = isDirectTranslateToEnglish
-    ? "https://api.groq.com/openai/v1/audio/translations"
-    : "https://api.groq.com/openai/v1/audio/transcriptions";
+  // Transcribe first so Whisper receives the selected source-language hint.
+  // The audio/translations endpoint does not accept a language hint, which can
+  // make short Hindi clips be mistaken for English (for example, "खाना हुआ है").
+  const endpoint = "https://api.groq.com/openai/v1/audio/transcriptions";
   let model = "whisper-large-v3";
 
   let ext = "webm";
@@ -66,7 +66,7 @@ export const processAudioWithGroqWhisper = async ({
 
   let formData = buildFormData(
     model,
-    !isDirectTranslateToEnglish && spokenLang ? spokenLang : null
+    spokenLang && spokenLang !== "auto" ? spokenLang : null
   );
 
   let response;
@@ -165,74 +165,43 @@ export const processAudioWithGroqWhisper = async ({
     return null;
   }
 
-  if (isDirectTranslateToEnglish && model !== "whisper-large-v3-turbo") {
-    // The audio-translation endpoint normally returns English. Confirm with
-    // auto-detected text translation as a guard for clips it returns in source language.
-    if (spokenLang && spokenLang !== "en") {
+  let translated = text;
+  if (targetLang && targetLang !== spokenLang) {
+    let transRes = null;
+    try {
+      transRes = await translateText(text, targetLang, spokenLang);
+    } catch (e) {
+      console.warn("Translation after Groq Whisper transcription error:", e);
+    }
+
+    // Retry with language auto-detection if a regional code is rejected or the
+    // provider silently returns the source text unchanged.
+    if (
+      !transRes?.translatedText ||
+      transRes.error ||
+      transRes.translatedText.trim() === text.trim()
+    ) {
       try {
-        const englishCheck = await translateText(text, "en", "auto");
-        if (
-          englishCheck?.translatedText &&
-          !englishCheck.error &&
-          englishCheck.translatedText.trim() !== text
-        ) {
-          return {
-            translatedText: englishCheck.translatedText,
-            originalText: "",
-            from: spokenLang,
-            to: "en",
-          };
-        }
+        transRes = await translateText(text, targetLang, "auto");
       } catch (e) {
-        console.warn("English output verification error:", e);
+        console.warn("Auto-detected translation retry error:", e);
       }
     }
 
-    return {
-      translatedText: text,
-      originalText: "",
-      from: spokenLang || "hi",
-      to: "en",
-    };
-  } else {
-    let translated = text;
-    if (targetLang && targetLang !== spokenLang) {
-      let transRes = null;
-      try {
-        transRes = await translateText(text, targetLang, spokenLang);
-      } catch (e) {
-        console.warn("Translation after Groq Whisper transcription error:", e);
-      }
-
-      // Retry with language auto-detection if a regional code is rejected or the
-      // provider silently returns the source text unchanged.
-      if (
-        !transRes?.translatedText ||
-        transRes.error ||
-        transRes.translatedText.trim() === text.trim()
-      ) {
-        try {
-          transRes = await translateText(text, targetLang, "auto");
-        } catch (e) {
-          console.warn("Auto-detected translation retry error:", e);
-        }
-      }
-
-      if (
-        !transRes?.translatedText ||
-        transRes.error ||
-        transRes.translatedText.trim() === text.trim()
-      ) {
-        return null;
-      }
-      translated = transRes.translatedText;
+    if (
+      !transRes?.translatedText ||
+      transRes.error ||
+      transRes.translatedText.trim() === text.trim()
+    ) {
+      return null;
     }
-
-    return {
-      translatedText: translated,
-      originalText: text,
-      from: spokenLang,
-      to: targetLang,
-    };
+    translated = transRes.translatedText;
   }
+
+  return {
+    translatedText: translated,
+    originalText: text,
+    from: spokenLang,
+    to: targetLang,
+  };
 };

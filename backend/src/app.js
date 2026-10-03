@@ -15,7 +15,7 @@ const server = createServer(app);
 const io = connectToSocket(server);
 app.set("port", (process.env.PORT || 8000));
 
-// Production CORS configuration allowing Render cross-origin requests
+
 const corsOptions = {
   origin: "*",
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
@@ -25,7 +25,7 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Explicit preflight handler ensuring OPTIONS requests succeed across reverse proxies
+
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH");
@@ -39,7 +39,7 @@ app.use((req, res, next) => {
 app.use(express.json({limit: "40kb"}));
 app.use(express.urlencoded({limit: "40kb", extended: true}));
 
-// Pre-warm healthcheck endpoint
+
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok" });
 });

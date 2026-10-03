@@ -147,6 +147,7 @@ export default function VideoMeetComponent() {
   const recognitionRef = useRef(null);
   const recognitionRestartTimeoutRef = useRef(null);
   const speechRecognitionUnavailableRef = useRef(false);
+  const lastVoiceActivityRef = useRef(0);
   const permissionRequestRef = useRef(null);
   const captionsEnabledRef = useRef(true);
   const audioRef = useRef(true);
@@ -205,7 +206,6 @@ export default function VideoMeetComponent() {
     askForUsernameRef.current = askForUsername;
     peerLanguagesRef.current = peerLanguages;
   }, [captionsEnabled, audio, spokenLanguage, captionLanguage, audioDubbing, autoTranslateChat, askForUsername, peerLanguages]);
-
 
   // Normalize room path across any host, port or trailing slashes
   const getRoomPath = () => {
@@ -440,7 +440,10 @@ export default function VideoMeetComponent() {
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i];
           const text = result[0]?.transcript?.trim();
-          if (result.isFinal && text && socketRef.current?.connected) {
+          // Browser recognition can hallucinate on silence. Only forward a result
+          // when the microphone's independent VAD recently detected actual voice.
+          const hadRecentVoice = Date.now() - lastVoiceActivityRef.current < 6000;
+          if (result.isFinal && text && hadRecentVoice && socketRef.current?.connected) {
             socketRef.current.emit("live-speech-caption", {
               text,
               originalText: text,
@@ -493,7 +496,11 @@ export default function VideoMeetComponent() {
   };
 
   const startGroqAudioRecorder = () => {
-    if (typeof window === "undefined" || typeof MediaRecorder === "undefined") return;
+    if (typeof window === "undefined") return;
+    if (typeof MediaRecorder === "undefined") {
+      startSpeechRecognition();
+      return;
+    }
     if (!window.localStream) return;
     const audioTracks = window.localStream.getAudioTracks();
     if (!audioTracks || audioTracks.length === 0 || !audioTracks[0].enabled) return;
@@ -544,8 +551,9 @@ export default function VideoMeetComponent() {
             const rms = Math.sqrt(sum / dataArray.length);
             if (rms > peakRms) peakRms = rms;
             // Real human speech is distinctly higher than background room noise (>0.028)
-            if (rms > 0.028) {
+            if (rms > 0.038) {
               speechTicks++;
+              lastVoiceActivityRef.current = Date.now();
             }
           }, 100);
         }
@@ -643,7 +651,6 @@ export default function VideoMeetComponent() {
   // Manage speech recognition & Groq Whisper audio recording: runs continuously whenever mic is unmuted in call!
   useEffect(() => {
     if (!askForUsername && audio) {
-      startSpeechRecognition();
       startGroqAudioRecorder();
     } else {
       stopSpeechRecognition();

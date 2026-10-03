@@ -235,20 +235,37 @@ const findBestVoice = (langCode, voiceLang) => {
   if (!voices || voices.length === 0) return null;
 
   const mappedCode = TTS_LANGUAGE_MAP[langCode] || langCode;
-  const targetLangLower = (voiceLang || mappedCode || "en").toLowerCase();
+  const targetLangLower = (voiceLang || mappedCode || "en").replace("_", "-").toLowerCase();
   const shortCode = targetLangLower.split("-")[0];
 
-  return (
-    voices.find((v) => v.lang.toLowerCase() === targetLangLower) ||
-    voices.find((v) => v.lang.replace("_", "-").toLowerCase() === targetLangLower) ||
-    voices.find((v) => v.lang.toLowerCase().startsWith(shortCode)) ||
-    voices.find((v) => v.lang.toLowerCase().includes(shortCode)) ||
-    null
-  );
+  const matchingVoices = voices
+    .map((voice) => {
+      const voiceLang = (voice.lang || "").replace("_", "-").toLowerCase();
+      let languageScore = 0;
+      if (voiceLang === targetLangLower) languageScore = 300;
+      else if (voiceLang.startsWith(`${shortCode}-`) || voiceLang === shortCode) languageScore = 200;
+      else if (voiceLang.includes(shortCode)) languageScore = 100;
+      if (!languageScore) return null;
+
+      const name = (voice.name || "").toLowerCase();
+      let qualityScore = 0;
+      if (/natural|neural/.test(name)) qualityScore += 120;
+      if (/microsoft/.test(name)) qualityScore += 80;
+      if (/online/.test(name)) qualityScore += 20;
+      if (/google/.test(name)) qualityScore -= 120;
+      if (voice.localService) qualityScore += 10;
+
+      return { voice, score: languageScore + qualityScore };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score);
+
+  return matchingVoices[0]?.voice || null;
 };
 
 /**
- * Play high-fidelity neural MP3 voice audio via backend streaming proxy
+ * Play Google Translate TTS audio via the backend as a fallback when no
+ * suitable device voice is available.
  */
 const playWithHtmlAudio = (cleanText, langCode) => {
   return new Promise((resolve, reject) => {
@@ -306,12 +323,12 @@ const playWithHtmlAudio = (cleanText, langCode) => {
 };
 
 /**
- * Fallback to browser Web Speech API if network or server proxy is offline
+ * Speak through the browser's selected system voice
  */
-const playWithWebSpeech = (cleanText, langCode) => {
-  return new Promise((resolve) => {
+const playWithWebSpeech = (cleanText, langCode, matchedVoice = null) => {
+  return new Promise((resolve, reject) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      return resolve();
+      return reject(new Error("Browser speech synthesis is unavailable"));
     }
 
     try {
@@ -328,7 +345,6 @@ const playWithWebSpeech = (cleanText, langCode) => {
       utterance.rate = 1.05;
       utterance.pitch = 1.0;
 
-      const matchedVoice = findBestVoice(langCode, voiceLang);
       if (matchedVoice) {
         utterance.voice = matchedVoice;
       }
@@ -336,24 +352,27 @@ const playWithWebSpeech = (cleanText, langCode) => {
       window._activeSpeechUtterance = utterance;
 
       let hasFinished = false;
-      const done = () => {
+      let hasStarted = false;
+      const done = (error = null) => {
         if (hasFinished) return;
         hasFinished = true;
         window._activeSpeechUtterance = null;
         notifySpeechActivity(false);
-        resolve();
+        if (error) reject(error);
+        else resolve();
       };
 
       utterance.onstart = () => {
+        hasStarted = true;
         notifySpeechActivity(true);
       };
 
-      utterance.onend = done;
+      utterance.onend = () => done();
       utterance.onerror = (e) => {
-        if (e.error !== "canceled" && e.error !== "interrupted") {
-          console.warn("WebSpeech utterance error:", e.error || e);
-        }
-        done();
+        if (e.error === "canceled" || e.error === "interrupted") return done();
+        const error = new Error(`Browser speech failed: ${e.error || "unknown error"}`);
+        console.warn(error.message);
+        done(error);
       };
 
       // Watchdog timer in case Chrome onend never fires
@@ -363,23 +382,43 @@ const playWithWebSpeech = (cleanText, langCode) => {
           try {
             window.speechSynthesis.resume();
           } catch (e) {}
-          done();
+          if (hasStarted) {
+            done();
+          } else {
+            try { window.speechSynthesis.cancel(); } catch (e) {}
+            done(new Error("Browser speech did not start"));
+          }
         }
       }, timeoutMs);
 
       window.speechSynthesis.speak(utterance);
     } catch (err) {
       console.warn("playWithWebSpeech error:", err);
-      resolve();
+      reject(err);
     }
   });
 };
 
 const playItem = async (cleanText, langCode) => {
+  const langObj = SUPPORTED_LANGUAGES.find((language) => language.code === langCode);
+  const voiceLang = langObj ? langObj.speechCode : langCode;
+  const deviceVoice = findBestVoice(langCode, voiceLang);
+
+  // Prefer a matching system voice (Microsoft/natural voices win when present)
+  // so normal dubbing does not sound like the Google Translate TTS voice.
+  if (deviceVoice && !/google/i.test(deviceVoice.name || "")) {
+    try {
+      await playWithWebSpeech(cleanText, langCode, deviceVoice);
+      return;
+    } catch (err) {
+      console.warn("Device voice unavailable; trying the audio provider:", err.message);
+    }
+  }
+
   try {
     await playWithHtmlAudio(cleanText, langCode);
   } catch (err) {
-    await playWithWebSpeech(cleanText, langCode);
+    await playWithWebSpeech(cleanText, langCode, deviceVoice);
   }
 };
 

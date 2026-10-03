@@ -1,7 +1,7 @@
 import { translate } from "@vitalets/google-translate-api";
 import httpStatus from "http-status";
 
-// In-memory cache for fast repeated translations
+
 const translationCache = new Map();
 const MAX_CACHE_SIZE = 2000;
 
