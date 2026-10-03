@@ -233,14 +233,19 @@ export const handleTtsRequest = async (req, res) => {
       }
     }
 
-    if (!response.ok) {
-      return res.status(response.status).json({ message: "Failed to fetch speech audio from TTS upstream" });
+    const audioBytes = Buffer.from(await response.arrayBuffer());
+    const upstreamType = response.headers.get("content-type") || "";
+    // Google can return an HTML challenge/error page with HTTP 200. Forwarding it
+    // as audio/mpeg makes browsers play noise or a short beep instead of speech.
+    if (!response.ok || !upstreamType.toLowerCase().includes("audio") || audioBytes.length < 256) {
+      return res.status(response.ok ? httpStatus.BAD_GATEWAY : response.status).json({
+        message: "Speech audio provider returned an invalid audio response",
+      });
     }
 
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Cache-Control", "public, max-age=86400");
-    const arrayBuffer = await response.arrayBuffer();
-    return res.send(Buffer.from(arrayBuffer));
+    return res.send(audioBytes);
   } catch (err) {
     console.error("TTS Proxy error:", err);
     return res.status(httpStatus.INTERNAL_SERVER_ERROR).json({ message: err.message });

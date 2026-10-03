@@ -243,8 +243,7 @@ const findBestVoice = (langCode, voiceLang) => {
     voices.find((v) => v.lang.replace("_", "-").toLowerCase() === targetLangLower) ||
     voices.find((v) => v.lang.toLowerCase().startsWith(shortCode)) ||
     voices.find((v) => v.lang.toLowerCase().includes(shortCode)) ||
-    voices.find((v) => v.default) ||
-    voices[0]
+    null
   );
 };
 
@@ -272,13 +271,13 @@ const playWithHtmlAudio = (cleanText, langCode) => {
         else resolve();
       };
 
-      // Watchdog: If audio doesn't start or finish within 4.5s, fall back to Web Speech
+      // Allow for a cold backend and long translated clauses before falling back.
       timer = setTimeout(() => {
         if (!hasFinished) {
           try { audio.pause(); audio.src = ""; } catch (e) {}
           finish(new Error("HTML Audio TTS timeout, falling back to Web Speech"));
         }
-      }, 4500);
+      }, 15000);
 
       audio.onplay = () => {
         notifySpeechActivity(true);
