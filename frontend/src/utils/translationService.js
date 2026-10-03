@@ -171,10 +171,10 @@ export const registerSpeechActivityCallback = (cb) => {
   return () => {};
 };
 
-const notifySpeechActivity = (isSpeaking) => {
+const notifySpeechActivity = (isSpeaking, provider = null) => {
   speechActivityCallbacks.forEach((cb) => {
     try {
-      cb(isSpeaking);
+      cb(isSpeaking, provider);
     } catch (e) {}
   });
 };
@@ -191,16 +191,6 @@ export const warmupSpeechSynthesis = () => {
     }
   } catch (e) {}
 
-  // Unlock HTML5 Audio context across Chromium & Safari
-  try {
-    const silentAudio = new Audio(
-      "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA"
-    );
-    silentAudio.volume = 0.01;
-    silentAudio.play().then(() => {
-      silentAudio.pause();
-    }).catch(() => {});
-  } catch (e) {}
 };
 
 // Preload available voices on browser startup
@@ -214,7 +204,6 @@ if (typeof window !== "undefined" && "speechSynthesis" in window) {
 
 const speechQueue = [];
 let isProcessingQueue = false;
-let currentPlayingAudio = null;
 
 export const TTS_LANGUAGE_MAP = {
   bho: "hi",
@@ -229,9 +218,39 @@ export const TTS_LANGUAGE_MAP = {
   or: "hi",
 };
 
-const findBestVoice = (langCode, voiceLang) => {
+const loadSpeechSynthesisVoices = async () => {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return [];
+
+  const synth = window.speechSynthesis;
+  const availableVoices = synth.getVoices();
+  if (availableVoices.length) return availableVoices;
+
+  // Chromium can return an empty list until its asynchronous voiceschanged event.
+  await new Promise((resolve) => {
+    let finished = false;
+    let timeout = null;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      if (timeout) clearTimeout(timeout);
+      synth.removeEventListener?.("voiceschanged", onVoicesChanged);
+      resolve();
+    };
+    const onVoicesChanged = () => {
+      if (synth.getVoices().length) finish();
+    };
+
+    synth.addEventListener?.("voiceschanged", onVoicesChanged);
+    timeout = setTimeout(finish, 1200);
+    if (synth.getVoices().length) finish();
+  });
+
+  return synth.getVoices();
+};
+
+const findBestVoice = async (langCode, voiceLang) => {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return null;
-  const voices = window.speechSynthesis.getVoices();
+  const voices = await loadSpeechSynthesisVoices();
   if (!voices || voices.length === 0) return null;
 
   const mappedCode = TTS_LANGUAGE_MAP[langCode] || langCode;
@@ -264,65 +283,6 @@ const findBestVoice = (langCode, voiceLang) => {
 };
 
 /**
- * Play Google Translate TTS audio via the backend as a fallback when no
- * suitable device voice is available.
- */
-const playWithHtmlAudio = (cleanText, langCode) => {
-  return new Promise((resolve, reject) => {
-    try {
-      const ttsLang = TTS_LANGUAGE_MAP[langCode] || langCode;
-      const url = `${server}/api/v1/translate/tts?text=${encodeURIComponent(cleanText)}&lang=${encodeURIComponent(ttsLang)}`;
-      const audio = new Audio(url);
-      currentPlayingAudio = audio;
-
-      let timer = null;
-      let hasFinished = false;
-
-      const finish = (err = null) => {
-        if (hasFinished) return;
-        hasFinished = true;
-        if (timer) clearTimeout(timer);
-        currentPlayingAudio = null;
-        notifySpeechActivity(false);
-        if (err) reject(err);
-        else resolve();
-      };
-
-      // Allow for a cold backend and long translated clauses before falling back.
-      timer = setTimeout(() => {
-        if (!hasFinished) {
-          try { audio.pause(); audio.src = ""; } catch (e) {}
-          finish(new Error("HTML Audio TTS timeout, falling back to Web Speech"));
-        }
-      }, 15000);
-
-      audio.onplay = () => {
-        notifySpeechActivity(true);
-      };
-
-      audio.onended = () => {
-        finish();
-      };
-
-      audio.onerror = (e) => {
-        finish(e);
-      };
-
-      const playPromise = audio.play();
-      if (playPromise !== undefined) {
-        playPromise.catch((err) => {
-          finish(err);
-        });
-      }
-    } catch (err) {
-      currentPlayingAudio = null;
-      notifySpeechActivity(false);
-      reject(err);
-    }
-  });
-};
-
-/**
  * Speak through the browser's selected system voice
  */
 const playWithWebSpeech = (cleanText, langCode, matchedVoice = null) => {
@@ -348,6 +308,7 @@ const playWithWebSpeech = (cleanText, langCode, matchedVoice = null) => {
       if (matchedVoice) {
         utterance.voice = matchedVoice;
       }
+      const provider = matchedVoice?.name || "Browser speech synthesis";
 
       window._activeSpeechUtterance = utterance;
 
@@ -357,14 +318,14 @@ const playWithWebSpeech = (cleanText, langCode, matchedVoice = null) => {
         if (hasFinished) return;
         hasFinished = true;
         window._activeSpeechUtterance = null;
-        notifySpeechActivity(false);
+        notifySpeechActivity(false, error || !hasStarted ? null : provider);
         if (error) reject(error);
         else resolve();
       };
 
       utterance.onstart = () => {
         hasStarted = true;
-        notifySpeechActivity(true);
+        notifySpeechActivity(true, provider);
       };
 
       utterance.onend = () => done();
@@ -402,23 +363,24 @@ const playWithWebSpeech = (cleanText, langCode, matchedVoice = null) => {
 const playItem = async (cleanText, langCode) => {
   const langObj = SUPPORTED_LANGUAGES.find((language) => language.code === langCode);
   const voiceLang = langObj ? langObj.speechCode : langCode;
-  const deviceVoice = findBestVoice(langCode, voiceLang);
+  const deviceVoice = await findBestVoice(langCode, voiceLang);
+  const languageName = langObj?.name || voiceLang;
 
-  // Prefer a matching system voice (Microsoft/natural voices win when present)
-  // so normal dubbing does not sound like the Google Translate TTS voice.
-  if (deviceVoice && !/google/i.test(deviceVoice.name || "")) {
-    try {
-      await playWithWebSpeech(cleanText, langCode, deviceVoice);
-      return;
-    } catch (err) {
-      console.warn("Device voice unavailable; trying the audio provider:", err.message);
-    }
+  if (!deviceVoice) {
+    const error = new Error(`No installed device voice for ${languageName}`);
+    notifySpeechActivity(false, error.message);
+    console.warn(error.message);
+    throw error;
   }
 
   try {
-    await playWithHtmlAudio(cleanText, langCode);
-  } catch (err) {
+    // Use browser/OS speech only. Remote Google TTS returned beeps for some
+    // device/language combinations instead of translated speech.
     await playWithWebSpeech(cleanText, langCode, deviceVoice);
+  } catch (err) {
+    notifySpeechActivity(false, `No device voice available for ${languageName}`);
+    console.warn(`Speech unavailable for ${languageName}:`, err.message);
+    throw err;
   }
 };
 
@@ -463,13 +425,6 @@ export const clearAudioQueue = () => {
   speechQueue.length = 0;
   isProcessingQueue = false;
   notifySpeechActivity(false);
-  if (currentPlayingAudio) {
-    try {
-      currentPlayingAudio.pause();
-      currentPlayingAudio.src = "";
-    } catch (e) {}
-    currentPlayingAudio = null;
-  }
   window._activeSpeechUtterance = null;
   if (typeof window !== "undefined" && window.speechSynthesis) {
     try {

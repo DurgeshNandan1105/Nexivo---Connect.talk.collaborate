@@ -84,6 +84,7 @@ export default function VideoMeetComponent() {
   const [audioDubbing, setAudioDubbing] = useState(true);
   const [originalAudioVolume, setOriginalAudioVolume] = useState("muted"); // "muted" (0% English only), "ducked" (15%), "normal" (100%)
   const [isDubbingSpeaking, setIsDubbingSpeaking] = useState(false);
+  const [lastDubbingVoice, setLastDubbingVoice] = useState("");
   const [showCaptionSettings, setShowCaptionSettings] = useState(false);
   const [activeCaption, setActiveCaption] = useState(null);
   const [autoTranslateChat, setAutoTranslateChat] = useState(false);
@@ -129,8 +130,9 @@ export default function VideoMeetComponent() {
 
   // Hook into real-time TTS speech activity for instant zero-lag audio ducking
   useEffect(() => {
-    const unregister = registerSpeechActivityCallback((speaking) => {
+    const unregister = registerSpeechActivityCallback((speaking, provider) => {
       setIsDubbingSpeaking(speaking);
+      if (provider) setLastDubbingVoice(provider);
       const vol = !audioDubbingRef.current
         ? 1.0
         : speaking
@@ -2297,6 +2299,13 @@ export default function VideoMeetComponent() {
                   >
                     🔊 Test Voice / Audio
                   </button>
+                </div>
+                <div role="status" aria-live="polite" style={{ color: "#94a3b8", fontSize: "0.75rem", textAlign: "right", marginTop: "6px" }}>
+                  {isDubbingSpeaking
+                    ? `Speaking with ${lastDubbingVoice || "system voice"}`
+                    : lastDubbingVoice
+                    ? `Last playback: ${lastDubbingVoice}`
+                    : "Voice test ready"}
                 </div>
 
                 {audioDubbing && (
