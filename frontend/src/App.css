@@ -46,6 +46,12 @@
   cursor: pointer;
 }
 
+.navBrandLogo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
 .landingNav .navHeader h1,
 .landingNav .navHeader h2 {
   font-size: clamp(1.35rem, 3.5vw, 1.85rem);
@@ -60,37 +66,47 @@
 .landingNav .navlist {
   display: flex;
   align-items: center;
-  gap: 1.25rem;
+  gap: 0.85rem;
 }
 
+.navGuestBtn,
+.navAuthBtn,
 .navLinkBtn,
 .landingNav .navlist p {
-  background: none;
-  border: none;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
   color: #cbd5e1;
-  font-size: clamp(0.85rem, 2vw, 1rem);
+  font-size: clamp(0.82rem, 2vw, 0.92rem);
   font-weight: 500;
   cursor: pointer;
-  padding: 6px 12px;
-  border-radius: 8px;
+  padding: 7px 14px;
+  border-radius: 10px;
   transition: all 0.2s ease;
   white-space: nowrap;
   font-family: inherit;
   margin: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
 }
 
+.navGuestBtn:hover,
+.navAuthBtn:hover,
 .navLinkBtn:hover,
 .landingNav .navlist p:hover {
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
 }
 
+.navCtaRegisterBtn,
 .navLoginBtn,
 .landingNav .navlist div[role='button'] {
   background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
   color: #ffffff;
   border: none;
-  font-size: clamp(0.85rem, 2vw, 0.95rem);
+  font-size: clamp(0.82rem, 2vw, 0.92rem);
   font-weight: 600;
   padding: 8px 18px;
   border-radius: 9999px;
@@ -99,12 +115,18 @@
   transition: all 0.2s ease;
   white-space: nowrap;
   font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
 }
 
+.navCtaRegisterBtn:hover,
 .navLoginBtn:hover,
 .landingNav .navlist div[role='button']:hover {
   transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(234, 88, 12, 0.45);
+  box-shadow: 0 6px 20px rgba(234, 88, 12, 0.5);
+  color: #ffffff;
 }
 
 .landingMainContainer {
@@ -613,10 +635,28 @@
   }
 }
 
-/* SMALL PHONES (max-width: 480px) */
-@media (max-width: 480px) {
-  .landingNav .navlist p:first-child {
-    display: none; /* Hide Guest on ultra small screens to keep clean nav */
+/* SMALL PHONES (max-width: 540px) */
+@media (max-width: 540px) {
+  .landingNav {
+    padding: 0.75rem 1rem;
+  }
+
+  .landingNav .navlist {
+    gap: 0.4rem;
+  }
+
+  .navGuestBtn {
+    display: none; /* Hide Guest on small screens to prioritize Sign In & Register */
+  }
+
+  .navAuthBtn {
+    padding: 6px 12px;
+    font-size: 0.82rem;
+  }
+
+  .navCtaRegisterBtn {
+    padding: 6px 14px;
+    font-size: 0.82rem;
   }
 
   .historyGrid {
@@ -629,5 +669,23 @@
   
   .homeNavActionBtn {
     padding: 8px 10px;
+  }
+}
+
+/* ULTRA SMALL PHONES (max-width: 360px) */
+@media (max-width: 360px) {
+  .landingNav .navHeader h1,
+  .landingNav .navHeader h2 {
+    font-size: 1.15rem;
+  }
+
+  .navAuthBtn {
+    padding: 5px 8px;
+    font-size: 0.75rem;
+  }
+
+  .navCtaRegisterBtn {
+    padding: 5px 10px;
+    font-size: 0.75rem;
   }
 }
