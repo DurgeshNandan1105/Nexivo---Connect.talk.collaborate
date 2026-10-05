@@ -552,8 +552,10 @@ export default function VideoMeetComponent() {
             }
             const rms = Math.sqrt(sum / dataArray.length);
             if (rms > peakRms) peakRms = rms;
-            // Real human speech is distinctly higher than background room noise (>0.028)
-            if (rms > 0.038) {
+            // Laptop microphones with echo cancellation/noise suppression often
+            // produce quieter speech than this. Keep the gate low enough to catch
+            // normal conversation while still ignoring the near-silent noise floor.
+            if (rms > 0.018) {
               speechTicks++;
               lastVoiceActivityRef.current = Date.now();
             }
@@ -593,9 +595,9 @@ export default function VideoMeetComponent() {
 
         // Upload to Groq Whisper ONLY if:
         // 1. Cooldown is satisfied (safely within 20 RPM limit)
-        // 2. Real sustained human voice was detected (speechTicks >= 4 and peakRms >= 0.038)
+        // 2. Real sustained human voice was detected (speechTicks >= 4 and peakRms >= 0.02)
         // This drops silence, fan hum, and breathing, completely eliminating Whisper silence hallucinations!
-        const hasRealSpeech = speechTicks >= 4 && peakRms >= 0.038;
+        const hasRealSpeech = speechTicks >= 4 && peakRms >= 0.02;
         if (
           hasRealSpeech &&
           canSendGroq &&
@@ -608,7 +610,9 @@ export default function VideoMeetComponent() {
           const blob = new Blob(chunks, { type: actualMime });
           chunks = [];
 
-          if (blob.size > 2500) {
+          // Short but valid Hindi phrases can produce small Opus blobs, especially
+          // after silence is included in the 3.5 second recording window.
+          if (blob.size > 1000) {
             try {
               const arrayBuffer = await blob.arrayBuffer();
               if (socketRef.current) {

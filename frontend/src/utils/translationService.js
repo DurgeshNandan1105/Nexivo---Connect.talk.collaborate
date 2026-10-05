@@ -367,10 +367,10 @@ const playItem = async (cleanText, langCode) => {
   const languageName = langObj?.name || voiceLang;
 
   if (!deviceVoice) {
-    const error = new Error(`No installed device voice for ${languageName}`);
-    notifySpeechActivity(false, error.message);
-    console.warn(error.message);
-    throw error;
+    // Some browsers can speak with their default/system voice even when their
+    // voice list is empty or does not contain an exact language match. Keep the
+    // requested utterance language so the browser can select the closest voice.
+    console.warn(`No listed device voice for ${languageName}; trying the browser default voice.`);
   }
 
   try {
@@ -378,7 +378,7 @@ const playItem = async (cleanText, langCode) => {
     // device/language combinations instead of translated speech.
     await playWithWebSpeech(cleanText, langCode, deviceVoice);
   } catch (err) {
-    notifySpeechActivity(false, `No device voice available for ${languageName}`);
+    notifySpeechActivity(false, `Speech unavailable for ${languageName}`);
     console.warn(`Speech unavailable for ${languageName}:`, err.message);
     throw err;
   }
