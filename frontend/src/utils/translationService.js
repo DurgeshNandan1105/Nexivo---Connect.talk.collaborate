@@ -267,11 +267,15 @@ const findBestVoice = async (langCode, voiceLang) => {
       if (!languageScore) return null;
 
       const name = (voice.name || "").toLowerCase();
+      // Google browser voices have produced beeps instead of speech on some
+      // devices. Never select them explicitly; let the browser fall back to a
+      // system voice when no compatible non-Google voice is listed.
+      if (/google/.test(name)) return null;
+
       let qualityScore = 0;
       if (/natural|neural/.test(name)) qualityScore += 120;
       if (/microsoft/.test(name)) qualityScore += 80;
       if (/online/.test(name)) qualityScore += 20;
-      if (/google/.test(name)) qualityScore -= 120;
       if (voice.localService) qualityScore += 10;
 
       return { voice, score: languageScore + qualityScore };
