@@ -95,44 +95,136 @@ export default function Authentication() {
 
   return (
     <ThemeProvider theme={defaultTheme}>
-      <Grid container component="main" sx={{ height: "100vh" }}>
+      <Grid
+        container
+        component="main"
+        sx={{
+          minHeight: "100dvh",
+          width: "100%",
+          backgroundColor: "#090d16",
+        }}
+      >
         <CssBaseline />
 
+        {/* Hero visual side - hidden on mobile, visible on tablet & desktop */}
         <Grid
-          size={{ xs: 0, sm: 4, md: 7 }}
+          size={{ xs: 12, sm: 4, md: 7 }}
           sx={{
-            backgroundImage: "url('https://picsum.photos/1200/900')",
+            display: { xs: "none", sm: "block" },
+            backgroundImage: "url('/background.png'), radial-gradient(circle at center, #1e1b4b, #0f172a)",
             backgroundRepeat: "no-repeat",
             backgroundSize: "cover",
             backgroundPosition: "center",
+            position: "relative",
           }}
-        />
+        >
+          <Box
+            sx={{
+              position: "absolute",
+              inset: 0,
+              background: "linear-gradient(to right, rgba(15, 23, 42, 0.4), rgba(15, 23, 42, 0.85))",
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "space-between",
+              p: { sm: 3, md: 5 },
+            }}
+          >
+            <Typography
+              variant="h5"
+              sx={{
+                fontWeight: 700,
+                color: "#ffffff",
+                letterSpacing: "-0.5px",
+                cursor: "pointer",
+              }}
+              onClick={() => {
+                if (window.location.pathname !== "/") {
+                  window.location.href = "/";
+                }
+              }}
+            >
+              Nexivo
+            </Typography>
 
+            <Box>
+              <Typography
+                variant="h4"
+                sx={{
+                  fontWeight: 700,
+                  color: "#f8fafc",
+                  fontSize: { sm: "1.5rem", md: "2.2rem" },
+                  lineHeight: 1.3,
+                  mb: 1.5,
+                }}
+              >
+                Break language barriers with live voice dubbing.
+              </Typography>
+              <Typography
+                variant="body1"
+                sx={{ color: "#94a3b8", fontSize: { sm: "0.9rem", md: "1.05rem" } }}
+              >
+                Seamless video conferencing with instant translation across Indian and global languages.
+              </Typography>
+            </Box>
+          </Box>
+        </Grid>
+
+        {/* Form side - responsive across mobile, tablet, and desktop */}
         <Grid
           size={{ xs: 12, sm: 8, md: 5 }}
           component={Paper}
           elevation={6}
           square
+          sx={{
+            backgroundColor: "#0f172a",
+            color: "#f8fafc",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "center",
+            alignItems: "center",
+            minHeight: { xs: "100dvh", sm: "100vh" },
+            p: { xs: 2, sm: 3, md: 4 },
+          }}
         >
           <Box
             sx={{
-              my: 6,
-              mx: 4,
+              width: "100%",
+              maxWidth: "420px",
+              my: { xs: 3, sm: 4 },
+              mx: "auto",
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
             }}
           >
-            <Avatar sx={{ m: 1, bgcolor: "secondary.main" }}>
+            <Avatar sx={{ m: 1, bgcolor: "primary.main", width: 48, height: 48 }}>
               <LockOutlinedIcon />
             </Avatar>
 
-            <Typography component="h1" variant="h5" sx={{ fontWeight: 600 }}>
+            <Typography
+              component="h1"
+              variant="h5"
+              sx={{
+                fontWeight: 700,
+                color: "#f8fafc",
+                fontSize: { xs: "1.35rem", sm: "1.6rem" },
+                textAlign: "center",
+              }}
+            >
               {formState === 0 ? "Sign In to Nexivo" : "Create your Account"}
             </Typography>
 
+            <Typography
+              variant="body2"
+              sx={{ color: "#94a3b8", mt: 0.5, mb: 1, textAlign: "center" }}
+            >
+              {formState === 0
+                ? "Enter your credentials to access your meetings"
+                : "Join thousands of users connecting globally"}
+            </Typography>
+
             {/* Tab switchers */}
-            <Box sx={{ mt: 2, display: "flex", gap: 1 }}>
+            <Box sx={{ mt: 2, mb: 1, display: "flex", gap: 1.5, width: "100%", justifyContent: "center" }}>
               <Button
                 variant={formState === 0 ? "contained" : "outlined"}
                 onClick={() => {
@@ -140,7 +232,13 @@ export default function Authentication() {
                   setError("");
                 }}
                 disabled={loading}
-                sx={{ borderRadius: "20px", textTransform: "none", px: 3 }}
+                sx={{
+                  borderRadius: "20px",
+                  textTransform: "none",
+                  px: 3,
+                  py: 0.8,
+                  fontWeight: 600,
+                }}
               >
                 Sign In
               </Button>
@@ -152,7 +250,13 @@ export default function Authentication() {
                   setError("");
                 }}
                 disabled={loading}
-                sx={{ borderRadius: "20px", textTransform: "none", px: 3 }}
+                sx={{
+                  borderRadius: "20px",
+                  textTransform: "none",
+                  px: 3,
+                  py: 0.8,
+                  fontWeight: 600,
+                }}
               >
                 Sign Up
               </Button>

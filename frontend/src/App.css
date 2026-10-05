@@ -1,96 +1,633 @@
+/* ==========================================================================
+   Nexivo Global & Responsive Styles for Mobile, Tablet, and Laptop/Desktop
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Landing Page Responsive Styles
+   -------------------------------------------------------------------------- */
 .landingPageContainer {
-  width: 100vw;
-  height: 100vh;
-  background: url("/public/background.png");
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: radial-gradient(circle at top left, #1e1b4b, #0f172a 60%, #020617);
+  background-image: 
+    linear-gradient(rgba(11, 15, 25, 0.75), rgba(11, 15, 25, 0.85)),
+    url("./background.png");
   background-repeat: no-repeat;
   background-size: cover;
-  color: white;
+  background-position: center;
+  color: #ffffff;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow-x: hidden;
 }
 
-.landingPageContainer nav {
-  padding-inline: 1.2rem;
-  padding-block: 1.6rem;
+.landingPageContainer nav,
+.landingNav {
+  width: 100%;
   display: flex;
   justify-content: space-between;
   align-items: center;
-
+  padding: 1.25rem 2rem;
+  background: rgba(15, 23, 42, 0.5);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  box-sizing: border-box;
 }
 
-.landingPageContainer nav h2 {
-  font-size: 1.8rem;
-  font-weight: 500;
-}
-
-.landingPageContainer nav .navlist {
+.landingNav .navHeader {
   display: flex;
-  gap: 1.6rem;
+  align-items: center;
+  gap: 10px;
   cursor: pointer;
+}
 
+.landingNav .navHeader h1,
+.landingNav .navHeader h2 {
+  font-size: clamp(1.35rem, 3.5vw, 1.85rem);
+  font-weight: 700;
+  margin: 0;
+  background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: -0.5px;
+}
+
+.landingNav .navlist {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.navLinkBtn,
+.landingNav .navlist p {
+  background: none;
+  border: none;
+  color: #cbd5e1;
+  font-size: clamp(0.85rem, 2vw, 1rem);
+  font-weight: 500;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  font-family: inherit;
+  margin: 0;
+}
+
+.navLinkBtn:hover,
+.landingNav .navlist p:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.navLoginBtn,
+.landingNav .navlist div[role='button'] {
+  background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+  color: #ffffff;
+  border: none;
+  font-size: clamp(0.85rem, 2vw, 0.95rem);
+  font-weight: 600;
+  padding: 8px 18px;
+  border-radius: 9999px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(234, 88, 12, 0.35);
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.navLoginBtn:hover,
+.landingNav .navlist div[role='button']:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(234, 88, 12, 0.45);
 }
 
 .landingMainContainer {
+  flex: 1;
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  padding-inline: 3rem;
-  height: 80vh;
+  padding: 2.5rem 3.5rem;
+  max-width: 1300px;
+  width: 100%;
+  margin: 0 auto;
+  gap: 3rem;
+  box-sizing: border-box;
+}
+
+.landingHeroText {
+  flex: 1;
+  max-width: 620px;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.landingHeroText h1 {
+  font-size: clamp(2rem, 4.5vw, 3.4rem);
+  font-weight: 800;
+  line-height: 1.18;
+  letter-spacing: -0.5px;
+  color: #f8fafc;
+  margin: 0;
+}
+
+.brandHighlight {
+  color: #f97316;
+  background: linear-gradient(135deg, #fb923c 0%, #ea580c 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.landingHeroSubtext,
+.landingHeroText > p {
+  font-size: clamp(1rem, 2.2vw, 1.25rem);
+  color: #94a3b8;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.landingCtaWrapper {
+  margin-top: 1rem;
+}
+
+.landingCtaBtn,
+.landingHeroText div[role='button'] a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+  color: #ffffff !important;
+  text-decoration: none;
+  font-size: clamp(1rem, 2vw, 1.2rem);
+  font-weight: 600;
+  padding: 14px 32px;
+  border-radius: 9999px;
+  box-shadow: 0 10px 25px -5px rgba(234, 88, 12, 0.5);
+  transition: all 0.25s ease;
+}
+
+.landingCtaBtn:hover,
+.landingHeroText div[role='button'] a:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 15px 35px -5px rgba(234, 88, 12, 0.65);
+}
+
+.landingHeroVisual {
+  flex: 1;
+  display: flex;
+  justify-content: center;
   align-items: center;
 }
 
-.landingMainContainer>div:nth-child(1) {
-  font-size: 2.2rem;
-}
-
-.landingMainContainer>div:nth-child(1) div[role='button'] {
-  background: #D97500;
-  width: fit-content;
-  padding: 1rem;
-  border-radius: 20px;
-  margin-top: 1.9rem;
-}
-
-.landingMainContainer>div:nth-child(1) div[role='button'] a {
-  text-decoration: none;
-  color: white;
-  font-size: 1.7rem;
-}
-
-.landingMainContainer>div:nth-child(2) img {
-  height: 70vh;
+.landingHeroVisual img {
+  max-height: 65vh;
   width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.6));
+  animation: floatSubtle 4s ease-in-out infinite alternate;
 }
 
+@keyframes floatSubtle {
+  0% { transform: translateY(0px); }
+  100% { transform: translateY(-12px); }
+}
+
+/* --------------------------------------------------------------------------
+   Home Page Responsive Styles
+   -------------------------------------------------------------------------- */
+.homePageWrapper {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: radial-gradient(circle at top left, #1e1b4b, #0f172a 60%, #020617);
+  color: #f8fafc;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  overflow-x: hidden;
+}
+
+.homeNavBar,
 .navBar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-inline: 20px;
-  text-align: center;
-
+  padding: 1rem 2rem;
+  background: rgba(15, 23, 42, 0.7);
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  box-sizing: border-box;
 }
-.meetContainer {
+
+.homeBrand {
   display: flex;
-  padding-inline: 20px;
-  height: 80vh;
-  gap: 10vw;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.homeBrandLogo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.homeBrand h2,
+.navBar h2 {
+  font-size: clamp(1.2rem, 3vw, 1.6rem);
+  font-weight: 700;
+  margin: 0;
+  background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.homeNavActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.homeNavActionBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #e2e8f0;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.homeNavActionBtn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+}
+
+.homeNavLogoutBtn {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.homeNavLogoutBtn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  color: #ffffff;
+}
+
+.meetContainer {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2.5rem 3.5rem;
+  max-width: 1280px;
+  width: 100%;
+  margin: 0 auto;
+  gap: 3rem;
+  box-sizing: border-box;
+}
+
+.leftPanel {
+  flex: 1;
+  max-width: 580px;
+  display: flex;
+  flex-direction: column;
   justify-content: center;
 }
 
-
-
-.leftPanel {
-  height: 100%;
+.meetHeroCard {
+  background: rgba(30, 41, 59, 0.5);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 24px;
+  padding: clamp(20px, 4vw, 36px);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 14px;
+}
 
+.meetBadge {
+  align-self: flex-start;
+  background: rgba(99, 102, 241, 0.2);
+  border: 1px solid rgba(129, 140, 248, 0.4);
+  color: #c7d2fe;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 20px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.meetTitle,
+.leftPanel h2 {
+  font-size: clamp(1.6rem, 3.8vw, 2.5rem);
+  font-weight: 700;
+  line-height: 1.25;
+  color: #f8fafc;
+  margin: 0;
+}
+
+.meetSubtitle {
+  font-size: clamp(0.92rem, 2vw, 1.05rem);
+  color: #94a3b8;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.meetJoinForm {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+  align-items: stretch;
+}
+
+.meetJoinBtn {
+  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 100%) !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+  padding: 12px 28px !important;
+  border-radius: 12px !important;
+  text-transform: none !important;
+  font-size: 1rem !important;
+  white-space: nowrap !important;
+  box-shadow: 0 8px 20px rgba(59, 130, 246, 0.4) !important;
+  transition: all 0.2s ease !important;
+}
+
+.meetJoinBtn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 25px rgba(99, 102, 241, 0.5) !important;
 }
 
 .rightPanel {
+  flex: 1;
   display: flex;
+  justify-content: center;
   align-items: center;
 }
 
+.homeIllustration,
 .rightPanel > img {
-  width: 30vw;
+  width: 100%;
+  max-width: 440px;
   height: auto;
+  border-radius: 24px;
+  filter: drop-shadow(0 20px 40px rgba(0, 0, 0, 0.5));
+}
+
+/* --------------------------------------------------------------------------
+   History Page Responsive Styles
+   -------------------------------------------------------------------------- */
+.historyPageContainer {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: radial-gradient(circle at top left, #1e1b4b, #0f172a 60%, #020617);
+  color: #f8fafc;
+  padding: clamp(16px, 3.5vw, 36px);
+  box-sizing: border-box;
+}
+
+.historyHeader {
+  max-width: 900px;
+  margin: 0 auto 24px auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(30, 41, 59, 0.6);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 12px 20px;
+  border-radius: 16px;
+}
+
+.historyHeaderLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.historyHeaderLeft h2 {
+  font-size: clamp(1.2rem, 3vw, 1.5rem);
+  font-weight: 700;
+  margin: 0;
+  color: #f8fafc;
+}
+
+.historyGrid {
+  max-width: 900px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.historyCard {
+  background: rgba(30, 41, 59, 0.55);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 18px 20px;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.historyCard:hover {
+  transform: translateY(-2px);
+  border-color: rgba(99, 102, 241, 0.4);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+}
+
+.historyCardCode {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #818cf8;
+  word-break: break-all;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.historyCardDate {
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.historyEmptyState {
+  max-width: 500px;
+  margin: 60px auto;
+  text-align: center;
+  background: rgba(30, 41, 59, 0.4);
+  border: 1px dashed rgba(255, 255, 255, 0.15);
   border-radius: 20px;
+  padding: 40px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+/* --------------------------------------------------------------------------
+   RESPONSIVE MEDIA QUERIES (TABLETS & PHONES)
+   -------------------------------------------------------------------------- */
+
+/* TABLET (max-width: 1024px) */
+@media (max-width: 1024px) {
+  .landingMainContainer {
+    padding: 2rem 2rem;
+    gap: 2rem;
+  }
+
+  .landingHeroVisual img {
+    max-height: 50vh;
+  }
+
+  .meetContainer {
+    padding: 2rem 2rem;
+    gap: 2rem;
+  }
+
+  .homeIllustration,
+  .rightPanel > img {
+    max-width: 340px;
+  }
+}
+
+/* MOBILE & SMALL TABLET (max-width: 768px) */
+@media (max-width: 768px) {
+  .landingNav,
+  .homeNavBar,
+  .navBar {
+    padding: 0.85rem 1.25rem;
+  }
+
+  .landingNav .navlist {
+    gap: 0.5rem;
+  }
+
+  .navLinkBtn,
+  .landingNav .navlist p {
+    padding: 5px 8px;
+    font-size: 0.82rem;
+  }
+
+  .navLoginBtn,
+  .landingNav .navlist div[role='button'] {
+    padding: 6px 14px;
+    font-size: 0.85rem;
+  }
+
+  .landingMainContainer {
+    flex-direction: column;
+    text-align: center;
+    padding: 1.5rem 1.25rem 2.5rem 1.25rem;
+    gap: 2rem;
+    justify-content: center;
+  }
+
+  .landingHeroText {
+    max-width: 100%;
+    align-items: center;
+  }
+
+  .landingCtaWrapper {
+    width: 100%;
+  }
+
+  .landingCtaBtn,
+  .landingHeroText div[role='button'] a {
+    width: 100%;
+    max-width: 280px;
+    box-sizing: border-box;
+  }
+
+  .landingHeroVisual img {
+    max-height: 40vh;
+    max-width: 85vw;
+  }
+
+  /* Home Page on Mobile */
+  .meetContainer {
+    flex-direction: column-reverse;
+    text-align: center;
+    padding: 1.5rem 1.25rem;
+    gap: 1.75rem;
+    justify-content: center;
+  }
+
+  .leftPanel {
+    max-width: 100%;
+    width: 100%;
+  }
+
+  .meetHeroCard {
+    align-items: center;
+    padding: 24px 18px;
+  }
+
+  .meetBadge {
+    align-self: center;
+  }
+
+  .meetJoinForm {
+    width: 100%;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .meetJoinBtn {
+    width: 100%;
+    padding: 12px !important;
+  }
+
+  .homeIllustration,
+  .rightPanel > img {
+    max-width: 220px;
+  }
+}
+
+/* SMALL PHONES (max-width: 480px) */
+@media (max-width: 480px) {
+  .landingNav .navlist p:first-child {
+    display: none; /* Hide Guest on ultra small screens to keep clean nav */
+  }
+
+  .historyGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .homeNavActionBtn span {
+    display: none; /* Icon-only on very small mobile for History */
+  }
+  
+  .homeNavActionBtn {
+    padding: 8px 10px;
+  }
 }

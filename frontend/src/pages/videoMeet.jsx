@@ -1529,17 +1529,7 @@ export default function VideoMeetComponent() {
               />
 
               {/* Language & Live Dubbing Card in Lobby */}
-              <div
-                style={{
-                  background: "rgba(15, 23, 42, 0.7)",
-                  borderRadius: "12px",
-                  padding: "12px 14px",
-                  border: "1px solid rgba(255, 255, 255, 0.12)",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "10px",
-                }}
-              >
+              <div className={styles.lobbyLanguageCard}>
                 <div
                   style={{
                     display: "flex",
@@ -1554,13 +1544,7 @@ export default function VideoMeetComponent() {
                   <span>Language & Live Translation</span>
                 </div>
 
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "1fr 1fr",
-                    gap: "10px",
-                  }}
-                >
+                <div className={styles.lobbyLanguageGrid}>
                   <div>
                     <label
                       style={{
